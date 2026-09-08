@@ -1,0 +1,7 @@
+{
+  "id": "lokf-enforcer",
+  "name": "LOKF Enforcer",
+  "author": "Noel McLoughlin",
+  "description": "Validate the LOKF (Linked Open Knowledge Format) semantic layer on top of OKF v0.2 in your vault.",
+  "repo": "noelmcloughlin/obsidian-lokf-enforcer"
+}

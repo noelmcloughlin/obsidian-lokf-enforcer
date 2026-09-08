@@ -1,0 +1,10 @@
+{
+	"id": "lokf-enforcer",
+	"name": "LOKF Enforcer",
+	"version": "0.1.0",
+	"minAppVersion": "1.13.0",
+	"description": "Validate the Linked Open Knowledge Format (LOKF) semantic layer on top of OKF v0.2: the bundle-root semantic header, base_iri authority and IRI minting, the type vocabulary, and typed relationships. Companion to an OKF v0.2 validator.",
+	"author": "Noel McLoughlin",
+	"authorUrl": "https://github.com/noelmcloughlin",
+	"isDesktopOnly": false
+}

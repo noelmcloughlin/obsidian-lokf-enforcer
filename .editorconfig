@@ -1,0 +1,21 @@
+# top-most EditorConfig file
+root = true
+
+[*]
+charset = utf-8
+end_of_line = lf
+insert_final_newline = true
+indent_style = space
+indent_size = 2
+
+# Kept byte-comparable with obsidian-sample-plugin, which uses tabs, so a diff
+# against upstream stays readable when it changes.
+[{esbuild.config.mjs,eslint.config.mts}]
+indent_style = tab
+indent_size = 4
+
+# version-bump.mjs rewrites these with JSON.stringify(..., "\t"), so tabs here
+# keep `npm version` from producing a whole-file reformat diff.
+[{manifest.json,versions.json}]
+indent_style = tab
+indent_size = 4

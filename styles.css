@@ -1,0 +1,190 @@
+/* LOKF Enforcer - compact report styles */
+
+.lokf-report {
+  padding: 6px 8px 16px 8px;
+  font-size: var(--font-ui-smaller);
+}
+
+.lokf-toolbar {
+  display: flex;
+  gap: 6px;
+  margin-bottom: 6px;
+}
+.lokf-toolbar button {
+  cursor: pointer;
+  padding: 2px 8px;
+  font-size: var(--font-ui-smaller);
+}
+
+.lokf-summary {
+  display: flex;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+.lokf-chip {
+  border-radius: 4px;
+  padding: 0 6px;
+  font-weight: 600;
+  font-size: var(--font-ui-smaller);
+  line-height: 1.6;
+}
+.lokf-chip-ok {
+  background: var(--background-modifier-success);
+  color: var(--text-normal);
+}
+.lokf-chip-err {
+  background: var(--background-modifier-error);
+  color: var(--text-on-accent);
+}
+.lokf-chip-warn {
+  background: var(--background-modifier-border);
+  color: var(--text-normal);
+}
+
+.lokf-body {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.lokf-group + .lokf-group {
+  margin-top: 5px;
+}
+.lokf-group-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 4px;
+  cursor: pointer;
+  border-radius: 4px;
+  line-height: 1.5;
+  color: var(--text-muted);
+  font-weight: 600;
+}
+.lokf-group-header:hover {
+  background: var(--background-modifier-hover);
+}
+.lokf-list {
+  padding-left: 12px;
+}
+
+/* The note in the editor, above the vault list and always open. */
+.lokf-active {
+  margin-bottom: 8px;
+  padding-bottom: 6px;
+  border-bottom: 1px solid var(--background-modifier-border);
+}
+.lokf-active h4 {
+  margin: 0 0 4px 0;
+  color: var(--text-muted);
+  font-size: var(--font-ui-smaller);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.lokf-active-ok {
+  padding: 2px 4px;
+  color: var(--text-muted);
+}
+
+.lokf-file-block {
+  border-radius: 4px;
+}
+.lokf-file-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 4px;
+  border-radius: 4px;
+  line-height: 1.5;
+}
+.lokf-file-head:hover {
+  background: var(--background-modifier-hover);
+}
+.lokf-caret {
+  width: 10px;
+  color: var(--text-muted);
+  flex: 0 0 auto;
+  cursor: pointer;
+}
+.lokf-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  flex: 0 0 auto;
+}
+.lokf-dot-err {
+  background: var(--text-error);
+}
+.lokf-dot-warn {
+  background: var(--text-warning);
+}
+.lokf-file-name {
+  flex: 1 1 auto;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  cursor: pointer;
+}
+.lokf-file-name:hover {
+  color: var(--text-accent);
+  text-decoration: underline;
+}
+
+.lokf-empty {
+  color: var(--text-muted);
+  padding: 8px 2px;
+}
+.lokf-count {
+  flex: 0 0 auto;
+  color: var(--text-muted);
+  background: var(--background-modifier-border);
+  border-radius: 8px;
+  padding: 0 6px;
+  font-size: var(--font-ui-smaller);
+}
+
+.lokf-issues {
+  padding: 2px 4px 4px 26px;
+}
+.lokf-issue {
+  display: flex;
+  align-items: flex-start;
+  gap: 5px;
+  margin-top: 2px;
+  line-height: 1.35;
+}
+.lokf-sev {
+  flex: 0 0 auto;
+}
+.lokf-sev-error {
+  color: var(--text-error);
+}
+.lokf-sev-warning {
+  color: var(--text-warning);
+}
+.lokf-rule {
+  color: var(--text-muted);
+}
+
+/* progress bar */
+.lokf-progress-wrap {
+  margin: 4px 0 8px 0;
+}
+.lokf-progress-track {
+  height: 6px;
+  border-radius: 3px;
+  background: var(--background-modifier-border);
+  overflow: hidden;
+}
+.lokf-progress-bar {
+  height: 100%;
+  width: 0%;
+  background: var(--interactive-accent);
+  transition: width 0.15s ease;
+}
+.lokf-progress-label {
+  margin-top: 3px;
+  font-size: var(--font-ui-smaller);
+  color: var(--text-muted);
+}

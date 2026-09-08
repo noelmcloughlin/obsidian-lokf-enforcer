@@ -1,0 +1,23 @@
+{
+	"compilerOptions": {
+		"inlineSourceMap": true,
+		"inlineSources": true,
+		"module": "ESNext",
+		"target": "ES2021",
+		"strict": true,
+		"noImplicitReturns": true,
+		"noFallthroughCasesInSwitch": true,
+		"noUncheckedIndexedAccess": true,
+		// obsidian-sample-plugin uses "node" (node10) here; that is deprecated and
+		// errors on TypeScript 7. "bundler" is the modern equivalent for an
+		// esbuild-bundled plugin and resolves relative paths and the bare
+		// "obsidian" specifier identically.
+		"moduleResolution": "bundler",
+		"isolatedModules": true,
+		"skipLibCheck": true,
+		"forceConsistentCasingInFileNames": true,
+		"allowSyntheticDefaultImports": true,
+		"lib": ["ES2021", "DOM"]
+	},
+	"include": ["src/**/*.ts", "scripts/**/*.ts"]
+}
