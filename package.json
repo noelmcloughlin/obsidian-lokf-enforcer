@@ -1,6 +1,6 @@
 {
-  "name": "lokf-enforcer",
-  "version": "0.1.0",
+  "name": "@noelmcloughlin/lokf-enforcer",
+  "version": "0.2.0",
   "description": "Validate the LOKF (Linked Open Knowledge Format) semantic layer on top of OKF v0.2 in Obsidian.",
   "main": "main.js",
   "type": "module",

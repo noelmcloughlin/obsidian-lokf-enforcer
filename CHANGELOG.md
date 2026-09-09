@@ -4,6 +4,25 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.0] - 2026-09-08
+
+### Added
+- `.lokf/knowledge/` - a self-documenting LOKF knowledge bundle covering this
+  plugin's own services, references, glossary, playbooks, and privacy policy,
+  referenced from a new "For AI Agents" section in the README.
+- `release.yml` now verifies the pushed tag matches `manifest.json`'s
+  `version` before building, failing fast on a mistagged push (e.g. a leading
+  `v`) instead of publishing a release Obsidian's installer can never find.
+
+### Security
+- `build.yml` and `release.yml`: added `step-security/harden-runner` in audit
+  mode, `persist-credentials: false` on checkout, and a least-privilege
+  `permissions: {}` workflow-level default, with write scopes opted into only
+  by the job that needs them.
+- `actions/checkout`, `actions/setup-node`, `actions/attest`, and
+  `step-security/harden-runner` pinned to commit SHAs instead of floating
+  major-version tags.
+
 ## [0.1.0] - 2026-09-08
 
 ### Added
