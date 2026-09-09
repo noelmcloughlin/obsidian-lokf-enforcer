@@ -23,3 +23,16 @@ data.json
 
 # local sample/test vault (never published)
 sample-vault/
+
+# OS/editor noise
+*.swp
+
+# Local tooling, if a contributor runs npm/npx here directly
+node_modules/
+
+# local sample/test vault (never published)
+-sample-vault/
+# Installed agent runtime state is local to the consuming repo, not source content.
+.agents/
+.claude/
+skills-lock.json
