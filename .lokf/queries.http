@@ -1,0 +1,38 @@
+### LOKF SPARQL queries for the LOKF Enforcer knowledge bundle.
+###
+### Requires a VS Code "REST Client" extension (humao.rest-client).
+### Start the endpoint first (from this directory):
+###     just lokf-serve          # or: uv run lokf serve knowledge
+### Then click "Send Request" above any query below.
+###
+### The server presets the LOKF schema prefixes (lokf:, schema:, dcterms:,
+### prov:, org:, skos:, rdf:, rdfs:, ...), so no PREFIX lines are needed.
+
+@base = http://127.0.0.1:8000
+
+### 1. Inventory - count concepts by type
+POST {{base}}/sparql
+Content-Type: application/sparql-query
+
+SELECT ?type (COUNT(?s) AS ?count)
+WHERE { ?s a ?type . FILTER(?type != rdf:Statement) }
+GROUP BY ?type
+ORDER BY DESC(?count)
+
+### 2. Every concept the plugin's own commands/settings service is part of or depends on
+POST {{base}}/sparql
+Content-Type: application/sparql-query
+
+SELECT ?title ?predicate ?target
+WHERE {
+  ?s schema:name "LOKF Enforcer Plugin" .
+  ?s ?predicate ?target .
+  ?target schema:name ?title .
+  FILTER(?predicate IN (dcterms:requires, schema:hasPart, dcterms:isPartOf))
+}
+
+### Bonus: whole graph as Turtle (CONSTRUCT -> text/turtle)
+POST {{base}}/sparql
+Content-Type: application/sparql-query
+
+CONSTRUCT { ?s ?p ?o } WHERE { ?s ?p ?o }

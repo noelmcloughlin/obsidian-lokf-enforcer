@@ -1,0 +1,20 @@
+# LOKF sidecar for LOKF Enforcer.
+#
+# A small Python "sidecar" that lets this repo validate and project its
+# knowledge/ bundle with the `lokf` toolkit. It does not affect the plugin
+# build (esbuild/TypeScript in the repo root).
+#
+#   uv sync             # install lokf into a local .venv
+#   just lokf-validate  # validate knowledge/ against the LOKF schema
+[project]
+name = "lokf-enforcer-knowledge"
+version = "0.1.0"
+description = "LOKF knowledge-bundle tooling for LOKF Enforcer."
+# Keep in sync with the `lokf` toolkit's own requires-python floor.
+requires-python = ">=3.10"
+dependencies = [
+    "lokf[build]>=0.7.0",
+]
+
+[tool.uv]
+package = false
