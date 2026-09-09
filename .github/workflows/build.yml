@@ -6,9 +6,19 @@ on:
     pull_request:
         branches: ['**']
 
+# Least-privilege default: every scope starts read-only (or none). The build
+# job below opts back into only the read access it needs to check out code;
+# no other job (present or future) inherits more. `pull_request` (not
+# `pull_request_target`) already keeps a fork PR's GITHUB_TOKEN read-only and
+# its run secret-free, regardless of this setting — this is defense in depth,
+# not what makes fork PRs safe here.
+permissions: {}
+
 jobs:
     build:
         runs-on: ubuntu-latest
+        permissions:
+            contents: read
 
         strategy:
             matrix:
@@ -16,9 +26,25 @@ jobs:
                 # See supported Node.js release schedule at https://nodejs.org/en/about/releases/
 
         steps:
-            - uses: actions/checkout@v6
+            # Monitors the runner's outbound network traffic for the rest of this
+            # job and flags anything unexpected — the main defense here against a
+            # compromised dependency's postinstall script (`npm ci` below runs
+            # esbuild's, which fetches a platform binary) phoning home, doubly
+            # relevant on a job that also builds arbitrary fork PR branches.
+            # Audit mode only: it observes and reports, it does not block, since
+            # hand-maintaining an exact egress allowlist here would be fragile
+            # against ordinary dependency churn. See
+            # https://github.com/step-security/harden-runner.
+            - name: Harden the runner
+              uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
+              with:
+                  egress-policy: audit
+
+            - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+              with:
+                  persist-credentials: false
             - name: Use Node.js ${{ matrix.node-version }}
-              uses: actions/setup-node@v6
+              uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
               with:
                   node-version: ${{ matrix.node-version }}
                   cache: 'npm'

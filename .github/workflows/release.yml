@@ -5,6 +5,11 @@ on:
         tags:
             - '*'
 
+# Least-privilege default: every scope starts read-only (or none). The build
+# job below opts back into exactly the three write scopes it needs; no other
+# job (present or future) inherits them.
+permissions: {}
+
 jobs:
     build:
         runs-on: ubuntu-latest
@@ -13,10 +18,40 @@ jobs:
             id-token: write
             attestations: write
         steps:
-            - uses: actions/checkout@v6
+            # Monitors the runner's outbound network traffic for the rest of this
+            # job and flags anything unexpected — the main defense this workflow
+            # has against a compromised dependency's postinstall script (`npm ci`
+            # below runs esbuild's, which fetches a platform binary) trying to
+            # exfiltrate GITHUB_TOKEN or phone home. Audit mode only: it observes
+            # and reports, it does not block, since hand-maintaining an exact
+            # egress allowlist here would be fragile against ordinary dependency
+            # churn. See https://github.com/step-security/harden-runner.
+            - name: Harden the runner
+              uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
+              with:
+                  egress-policy: audit
+
+            - name: Check out the tagged commit
+              uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+              with:
+                  persist-credentials: false
+
+            # Obsidian matches a release to a plugin version by tag name, exact
+            # string equality against manifest.json's "version" — no "v" prefix,
+            # no partial match. Catch a mistagged push (e.g. `v0.2.0` instead of
+            # `0.2.0`) here, before spending a build + attestation on a release
+            # Obsidian's installer would never find.
+            - name: Verify tag matches manifest version
+              run: |
+                  tag="${{ github.ref_name }}"
+                  version="$(node -p "require('./manifest.json').version")"
+                  if [ "$tag" != "$version" ]; then
+                    echo "::error::Tag '$tag' does not match manifest.json version '$version'. Obsidian requires the release tag to equal the version exactly, with no leading 'v'. Delete this tag, then re-tag as '$version' (see CONTRIBUTING.md's release flow)."
+                    exit 1
+                  fi
 
             - name: Use Node.js
-              uses: actions/setup-node@v6
+              uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
               with:
                   node-version: 24
                   cache: 'npm'
@@ -32,7 +67,7 @@ jobs:
                   [ -f styles.css ] && echo "exists=true" >> "$GITHUB_OUTPUT" || echo "exists=false" >> "$GITHUB_OUTPUT"
 
             - name: Attest build provenance
-              uses: actions/attest@v4
+              uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
               with:
                   subject-path: |
                       main.js
@@ -42,9 +77,9 @@ jobs:
               env:
                   GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
               run: |
-                  tag="${GITHUB_REF#refs/tags/}"
+                    tag="${{ github.ref_name }}"
 
-                  gh release create "$tag" \
-                    --title="$tag" \
-                    --draft \
-                    main.js manifest.json ${{ steps.styles.outputs.exists == 'true' && 'styles.css' || '' }}
+                    gh release create "$tag" \
+                        --title="$tag" \
+                        --draft \
+                        main.js manifest.json ${{ steps.styles.outputs.exists == 'true' && 'styles.css' || '' }}
