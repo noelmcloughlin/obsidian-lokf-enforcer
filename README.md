@@ -9,9 +9,21 @@ If you keep a structured knowledge base in Obsidian - a wiki, a team's shared br
 
 It speaks a particular dialect of structured notes called **LOKF** (more on that below) - on top of, not instead of, the Open Knowledge Format (OKF) v0.2 that [OKF Enforcer](https://github.com/MartinForReal/okf-enforcer) (or any other OKF v0.2 validator) already checks.
 
-If the [`lokf-agent-skills`](https://github.com/noelmcloughlin/lokf-agent-skills) are the library's staff - one lays the network, one binds it into order, one holds the scales, one guides the visitors - this plugin is the registrar at the cataloguing desk. **It checks each record as it is written, and vouches for nothing.**
+If the [`lokf-agent-skills`](https://github.com/noelmcloughlin/lokf-agent-skills) are the library's staff - one lays the network, one binds it into order, one holds the scales, one guides the visitors - the two Obsidian plugins work the **registrar's desk**, where the records themselves are kept and the paperwork has to be straight. **LOKF Enforcer** - this one - checks that each record is well-formed as it is written. [LOKF Curator](https://github.com/noelmcloughlin/obsidian-lokf-curator) puts the source beside the claim and writes down what a person decided. **Neither reaches a verdict of its own: a registrar keeps the provenance honest and leaves the judging to the curator.**
 
-> **For AI agents:** if `.lokf/knowledge/index.md` exists in this repository, read it first - it is a queryable [LOKF](https://lokf.nolan-nichols.com) knowledge bundle with repository-specific context that plain prose can't express. A concept marked `status: draft` has not yet been confirmed by a person; one with a `human:` entry under `verified` has - weigh them accordingly. The `lokf-docent` skill, if installed, is the disciplined way to answer from the bundle.
+> **For AI agents:** if `.lokf/knowledge/index.md` exists in this repository, read it first - it is a queryable [LOKF](https://lokf.nolan-nichols.com) knowledge bundle of repository-specific context; `llms.txt` says how to weigh what you find there (drafts vs. person-confirmed) and names the `lokf-docent` skill for answering from it.
+
+## Why a vault needs a catalogue
+
+The knowledge is already in the vault. What's missing is a way to tell, at a glance, which of it is still sound - and without that you end up re-checking everything yourself, which is the work the vault was supposed to save you, while the notes quietly rot.
+
+A catalogue is only worth keeping if its records hold their shape. That is this plugin's half of the job: the frontmatter is well-formed, the types are ones the vocabulary knows, the relationships point at notes that exist, and the ids are the ones this bundle's `base_iri` would mint. Everything above that - *who* checked a claim, and *when* - is recorded in the same files by [LOKF Curator](https://github.com/noelmcloughlin/obsidian-lokf-curator), and shown in plain words:
+
+- **Confirmed by a person** - a named person checked it against its source.
+- **Checked by automation only** - automation re-checked that the source still matches; no person has.
+- **Nobody has checked this yet** - no check of any kind is recorded.
+
+Those labels are computed from the frontmatter on every read, never stored, so they cannot drift from what they describe. Well-formed is the floor they stand on: a record nobody can parse is one nobody can vouch for either.
 
 ## What it looks like
 
@@ -86,9 +98,9 @@ Required `type`, `generated`/`verified` provenance and trust, `status`/`stale_af
 
 ### Where this fits: the "Schema-valid" tier
 
-The companion [lokf-agent-skills](https://github.com/noelmcloughlin/lokf-agent-skills) project describes four levels of trust a claim in a bundle can earn: **schema-valid** (the frontmatter is well-formed and its relations resolve), **source-consistent** (an agent re-checked it against its source), **human-confirmed** (a named person vouches for it), and **proven-in-use** (a real question got answered from it). This plugin checks the first tier - schema-valid, and only the LOKF slice of it - as you write, inside the editor. It cannot tell you whether a claim is *true*; that takes a librarian pass and a curator's review.
+The companion [lokf-agent-skills](https://github.com/noelmcloughlin/lokf-agent-skills) project describes four levels of trust a claim in a bundle can earn: **schema-valid** (the frontmatter is well-formed and its relations resolve), **source-consistent** (an agent re-checked it against its source), **human-confirmed** (a named person vouches for it), and **proven-in-use** (a real question got answered from it). Each proves less than its name suggests. This plugin checks the first tier - schema-valid, and only the LOKF slice of it - as you write, inside the editor. It cannot tell you whether a claim is *true*; that takes a librarian pass and a curator's review, and [LOKF Curator](https://github.com/noelmcloughlin/obsidian-lokf-curator) is where the latter happens in the editor.
 
-**None of that is a dependency.** The skills are optional companions, not a requirement. This plugin reads Markdown and YAML and works on any LOKF bundle however it was produced - by hand, by the `lokf` CLI, or by the skills - and it never requires, loads, or calls into a skill, an agent, or another plugin, exactly as it never calls into an OKF validator (above). The skills, in turn, do not need this plugin: `lokf validate` remains the gate they rely on. The only thing the two share is the LOKF specification. The skills are agent tooling for a *code repository* - deriving a bundle from source, keeping it in sync, having a person confirm it; this plugin is the in-editor counterpart of one thing they do, the schema check, run immediately while you write.
+**None of that is a dependency.** The skills are optional companions, not a requirement. This plugin reads Markdown and YAML and works on any LOKF bundle however it was produced - by hand, by the `lokf` CLI, or by the skills - and it never requires, loads, or calls into a skill, an agent, or another plugin, exactly as it never calls into an OKF validator (above). The skills, in turn, do not need this plugin: `lokf validate` remains the gate they rely on. The only thing they share is the LOKF specification. LOKF Curator is a companion on the tier above, and the two plugins are equally independent: neither detects whether the other is installed. The skills are agent tooling for a *code repository* - deriving a bundle from source, keeping it in sync, having a person confirm it; this plugin is the in-editor counterpart of one thing they do, the schema check, run immediately while you write.
 
 ### Philosophy: warnings, not errors, almost everywhere
 
@@ -124,7 +136,8 @@ scripts/
 - The [LinkML Community](https://linkml.io/), creators of [LinkML](https://linkml.io/linkml/), the schema language LOKF is written in.
 - [obsidian-sample-plugin](https://github.com/obsidianmd/obsidian-sample-plugin), whose build/lint/release layout this repository follows.
 - [OKF Enforcer](https://github.com/MartinForReal/okf-enforcer) by MartinForReal - the OKF v0.2 validator this plugin is designed to sit beside, and whose bundle header is a smoke-test fixture here.
-- [lokf-agent-skills](https://github.com/noelmcloughlin/lokf-agent-skills) - the agent skills whose trust model this README borrows, and whose bundle template the smoke test validates.
+- [lokf-agent-skills](https://github.com/noelmcloughlin/lokf-agent-skills) - the agent skills whose trust model and plain-language labels this README shares, and whose bundle template the smoke test validates.
+- [LOKF Curator](https://github.com/noelmcloughlin/obsidian-lokf-curator) - the plugin at the human-confirmed tier, forked from this one and sharing its bundle-root plumbing. Neither plugin depends on the other.
 
 ## About this repository's own knowledge bundle
 
