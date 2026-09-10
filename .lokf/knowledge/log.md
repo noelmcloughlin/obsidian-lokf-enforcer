@@ -1,5 +1,33 @@
 # Change Log
 
+## 2026-09-11 (2)
+
+* **Corrected** `services/validator-engine.md`, `services/lokf-enforcer-plugin.md`,
+  `services/report-view.md` against the six-bug correctness pass on
+  `src/*.ts`: the rule engine now warns on a bare scalar where the schema
+  requires a list (the same bug class fixed in this bundle's own concepts on
+  2026-09-09, recurring in `dependsOn` et al.), on a non-string `type`, on an
+  unnormalized `excludeFolders` entry, and closes a `:port` bypass in the
+  authority-denylist check; **Validate active note** now tells the user why
+  when it does nothing (excluded, or outside every bundle root); and the
+  report panel's "N clean" count no longer subtracts bundle-level findings
+  that were never one of the scanned files.
+* **Added** `playbooks/scheduled-librarian.md` (`status: draft`): the
+  `knowledge-librarian.yaml` workflow's two-job privilege split (a read-only
+  agent job with no persisted credentials, handing a patch to a privileged
+  job that runs no agent code) had no concept at all, despite being the most
+  security-sensitive workflow in the repo - `SECURITY.md` documents it in
+  prose but nothing in the bundle traced back to it.
+* **Added** `policies/ai-covenant.md`, `policies/code-of-conduct.md` (both
+  `status: draft`): two governance documents new since the last pass,
+  adopted verbatim from the sibling `lokf-agent-skills` repository.
+* **Extended** `playbooks/quality-gates.md`: added `.github/dependabot.yml`,
+  the mechanism that actually keeps the gate's own SHA pins from going
+  stale (`actionlint` catches syntax drift, never staleness).
+* **Updated** `playbooks/knowledge-sources.md` with source-map rows for all
+  of the above, and re-checked the PyPI `lokf` floor (still `0.7.0`, no
+  bump needed).
+
 ## 2026-09-11
 
 * **Corrected** `services/lokf-enforcer-plugin.md`, `references/commands-and-settings.md`:

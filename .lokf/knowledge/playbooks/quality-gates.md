@@ -8,7 +8,7 @@ dependsOn:
   - https://lokf-enforcer.example/knowledge/references/obsidian-plugin-guidelines
 generated:
   by: process:lokf-librarian
-  at: "2026-09-11T00:00:00Z"
+  at: "2026-09-11T12:00:00Z"
 status: draft
 ---
 
@@ -41,3 +41,11 @@ fragment meant to start mid-document). `MD024` is scoped to `siblings_only`
 rather than disabled outright, so `CHANGELOG.md`'s repeated
 Keep-a-Changelog headings (`### Added` under each `## [x.y.z]`) pass while a
 genuine duplicate heading under the same parent still fails.
+
+`.github/dependabot.yml` keeps the same gate from going stale: `actionlint`
+(above) catches a pinned action's syntax drift, never its staleness, so a
+weekly PR bumps the pinned SHAs in every workflow, the plugin's npm
+devDependencies (grouped into one PR, since none of them ship in `main.js`),
+and separately the `.lokf/` sidecar's own `lokf` floor in `pyproject.toml` -
+kept apart because a major bump there can need concept-frontmatter changes,
+unlike a routine Actions or devDependency bump.

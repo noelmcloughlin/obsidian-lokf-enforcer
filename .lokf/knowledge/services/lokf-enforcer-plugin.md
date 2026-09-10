@@ -13,10 +13,10 @@ about:
   - https://lokf-enforcer.example/knowledge/references/commands-and-settings
 generated:
   by: process:lokf-librarian
-  at: "2026-09-11T00:00:00Z"
+  at: "2026-09-11T12:00:00Z"
 verified:
   - by: process:lokf-librarian
-    at: "2026-09-11T00:00:00Z"
+    at: "2026-09-11T12:00:00Z"
 ---
 
 # Overview
@@ -25,6 +25,13 @@ verified:
 registers three commands (`validate-vault`, `validate-active`,
 `scaffold-root-header`), a clickable status-bar indicator (`LOKF ✓` /
 `LOKF ⚠ N` / `LOKF ✖ N`), and the collapsible side-panel report view.
+
+Running **Validate active note** (the command, or a status-bar click) on a
+note excluded by settings or outside every configured bundle root now says
+so via a `Notice`, instead of clearing the status bar to `LOKF: —` with no
+explanation - every other outcome (clean, unreadable, N findings) already
+produced one. The debounced file-open path that fires on every navigation
+stays silent by design; only an explicit ask gets told why nothing happened.
 
 It caches the bundle-root `base_iri` (read once per scan from `index.md`,
 invalidated on `create`/`modify`/`delete`/`rename` of that one file) so

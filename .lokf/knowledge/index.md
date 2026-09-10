@@ -45,10 +45,13 @@ A [LOKF](https://lokf.nolan-nichols.com) knowledge base for the **LOKF Enforcer*
 * [Contributing](playbooks/contributing.md)
 * [Releasing](playbooks/releasing.md)
 * [Quality gates](playbooks/quality-gates.md)
+* [Scheduled librarian](playbooks/scheduled-librarian.md)
 
 # Policies
 
 * [No telemetry](policies/no-telemetry.md)
+* [AI Covenant](policies/ai-covenant.md)
+* [Code of Conduct](policies/code-of-conduct.md)
 
 # Explanation
 
