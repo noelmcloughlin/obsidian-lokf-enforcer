@@ -206,9 +206,28 @@ export function isReserved(path: string): "index" | "log" | null {
   return null;
 }
 
+// isExcluded runs once per candidate file per scan, so the normalized folder
+// list is cached rather than rebuilt per call - same WeakMap-on-array-identity
+// convention as isKnownType above, sound for the same reason (settings.ts
+// assigns a fresh parseCsv() array on every edit, never mutates in place).
+const normalizedExcludeLists = new WeakMap<string[], string[]>();
+
+function normalizedExcludeFolders(excludeFolders: string[]): string[] {
+  let norm = normalizedExcludeLists.get(excludeFolders);
+  if (!norm) {
+    norm = excludeFolders.map(normalizeBundleRoot).filter(Boolean);
+    normalizedExcludeLists.set(excludeFolders, norm);
+  }
+  return norm;
+}
+
+/** Settles the same spellings normalizeBundleRoot does ("notes/", "/notes",
+ *  " notes ", "./notes") onto the single form vault paths use, so a folder
+ *  typed with a trailing slash - the natural way to write one - isn't
+ *  silently never excluded. */
 export function isExcluded(path: string, settings: LokfSettings): boolean {
-  return settings.excludeFolders.some(
-    (folder) => folder && (path === folder || path.startsWith(folder + "/"))
+  return normalizedExcludeFolders(settings.excludeFolders).some(
+    (folder) => path === folder || path.startsWith(folder + "/")
   );
 }
 
@@ -374,7 +393,10 @@ export function validateRootHeader(
           message: `base_iri "${baseIri}" must end with "/" - concept ids are minted by straight concatenation.`,
         });
       }
-      const host = url.host.toLowerCase();
+      // .hostname, not .host: the latter includes ":port", which would let
+      // "https://github.com:8080/..." slip past a denylist entry of
+      // "github.com" - the same authority, just on a non-default port.
+      const host = url.hostname.toLowerCase();
       if (matchesDomainList(host, settings.authorityDenylist)) {
         issues.push({
           severity: "error",
@@ -503,8 +525,23 @@ function validateFieldsAndDistribution(data: Record<string, unknown>): LokfIssue
 export function validateTypeVocabulary(data: Record<string, unknown>, settings: LokfSettings): LokfIssue[] {
   const issues: LokfIssue[] = [];
   const typeRaw = data["type"];
-  const type = typeof typeRaw === "string" ? typeRaw.trim() : "";
-  if (!type) return issues; // missing type is the installed OKF validator's error to raise
+  // undefined/null is effectively missing - the installed OKF validator's
+  // error to raise, not this one's. A list or mapping is a genuine shape
+  // mistake (unlike a coercible scalar - "123" or "true" - which falls
+  // through to the ordinary "not one of the vocabulary" warning below,
+  // exactly like an unrecognized string would).
+  if (typeRaw === undefined || typeRaw === null) return issues;
+  const typeScalar = asScalar(typeRaw);
+  if (typeScalar === null) {
+    issues.push({
+      severity: "warning",
+      rule: "lokf/3-vocab",
+      message: `type ${describeValue(typeRaw)} should be a single string naming a LOKF class, not a list or mapping.`,
+    });
+    return issues;
+  }
+  const type = typeScalar.trim();
+  if (!type) return issues; // blank string is effectively missing too
 
   if (settings.warnUnknownType && !isKnownType(type, settings.knownTypes)) {
     issues.push({
@@ -620,11 +657,26 @@ export function validateRelationships(
 ): LokfIssue[] {
   const issues: LokfIssue[] = [];
 
-  const checkTargets = (field: string, raw: unknown) => {
+  // `mustBeList` applies only to the ten named RELATION_FIELDS below, never to
+  // a single relations[].target: the generated schema declares those ten
+  // slots multivalued (Rule 4), so a bare scalar there - natural to write,
+  // and semantically a single target either way - fails real `lokf validate`
+  // even though this function would happily resolve it. A real audit of this
+  // bundle found exactly this mistake in roughly half its concepts (see
+  // .lokf/knowledge/log.md, 2026-09-09) - `lokf validate` is the only thing
+  // that ever caught it before this warning existed.
+  const checkTargets = (field: string, raw: unknown, mustBeList = false) => {
     if (raw === undefined) return;
     if (typeof raw !== "string" && !Array.isArray(raw)) {
       issues.push({ severity: "warning", rule: "lokf/4-relations", message: `${field} should be a string or a list of strings.` });
       return;
+    }
+    if (mustBeList && !Array.isArray(raw)) {
+      issues.push({
+        severity: "warning",
+        rule: "lokf/4-relations",
+        message: `${field} is a single value, but the LOKF schema requires a list even for one target - write "${field}:" on its own line with "- ${raw}" indented below it.`,
+      });
     }
     const values = Array.isArray(raw) ? raw : [raw];
     for (const v of values) {
@@ -650,7 +702,7 @@ export function validateRelationships(
   };
 
   for (const field of RELATION_FIELDS) {
-    checkTargets(field, data[field]);
+    checkTargets(field, data[field], true);
   }
 
   const relations = data["relations"];

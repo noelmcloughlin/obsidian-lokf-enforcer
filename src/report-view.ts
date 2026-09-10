@@ -8,6 +8,11 @@ export const LOKF_VIEW_TYPE = "lokf-report-view";
 export interface FileResult {
   path: string;
   issues: LokfIssue[];
+  /** True for a bundle-level finding (no root index.md, a hidden or missing
+   *  bundle-root folder) that isn't one of the files actually scanned - its
+   *  `path` names where to hang the finding, not a file `scanned` counted.
+   *  Lets the clean-count below subtract only real per-file results. */
+  synthetic?: boolean;
 }
 
 /** The folder a vault-relative path sits in; "" for a note at the vault root. */
@@ -119,7 +124,11 @@ export class LokfReportView extends ItemView {
     el.empty();
     const errFiles = this.results.filter(hasError).length;
     const warnFiles = this.results.length - errFiles;
-    const cleanCount = Math.max(0, this.scanned - this.results.length);
+    // Subtract only real per-file results - a synthetic bundle-level finding
+    // (missing root index.md, a hidden root, ...) has a path that was never
+    // part of `scanned`, so counting it here would undercount "clean".
+    const fileResults = this.results.filter((r) => !r.synthetic).length;
+    const cleanCount = Math.max(0, this.scanned - fileResults);
     el.createSpan({ cls: "lokf-chip lokf-chip-ok", text: `${cleanCount} clean` });
     el.createSpan({ cls: "lokf-chip lokf-chip-warn", text: `${warnFiles} warnings` });
     el.createSpan({ cls: "lokf-chip lokf-chip-err", text: `${errFiles} errors` });

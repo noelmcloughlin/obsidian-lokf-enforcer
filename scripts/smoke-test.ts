@@ -24,6 +24,7 @@ import {
   splitFrontmatter,
   mintExpectedId,
   resolveRelationTarget,
+  isExcluded,
   DEFAULT_SETTINGS,
   type LokfIssue,
   type LokfSettings,
@@ -118,6 +119,16 @@ section("base_iri inside an uncontrolled URL space (authority violation)", () =>
   expect("one authority error", errors(issues) === 1 && issues[0]?.rule === "lokf/2-authority", show(issues));
 });
 
+section("base_iri inside a denylisted host on a non-default port", () => {
+  // `url.host` includes ":port"; comparing against that would let this slip
+  // past the "github.com" denylist entry - the same authority, just fronted
+  // by a non-default port.
+  const issues = check("index.md", `---\nlokf_version: "0.2"\nbase_iri: https://github.com:8080/acme/repo/knowledge/\n---\n`, {
+    isRoot: true,
+  });
+  expect("one authority error", errors(issues) === 1 && issues[0]?.rule === "lokf/2-authority", show(issues));
+});
+
 section("base_iri missing trailing slash", () => {
   const issues = check("index.md", `---\nlokf_version: "0.2"\nbase_iri: https://acme.example/knowledge\n---\n`, {
     isRoot: true,
@@ -172,6 +183,23 @@ section("bundle root normalizes, and a dot-folder root is refused", () => {
   expect("a nested ordinary path is fine", hiddenRootSegment("projects/foo") === null, "expected null");
   expect("blank (the vault root) is fine", hiddenRootSegment("") === null, "expected null");
   expect("a dot inside a name is not a dot-folder", hiddenRootSegment("v0.2-knowledge") === null, "expected null");
+});
+
+section("excludeFolders accepts the same spellings normalizeBundleRoot does", () => {
+  // A trailing slash is the natural way to type a folder, so it must exclude
+  // just as well as the bare form - previously only the exact bare spelling
+  // ("notes", no slash, no whitespace) worked at all.
+  for (const folder of ["notes", "notes/", "/notes", " notes ", "./notes", "notes\\"]) {
+    const settings = { ...DEFAULT_SETTINGS, excludeFolders: [folder] };
+    expect(
+      `${JSON.stringify(folder)} excludes "notes/a.md"`,
+      isExcluded("notes/a.md", settings),
+      `isExcluded returned false for excludeFolders: [${JSON.stringify(folder)}]`
+    );
+  }
+  const settings = { ...DEFAULT_SETTINGS, excludeFolders: ["notes"] };
+  expect("a sibling folder with a shared prefix is not excluded", !isExcluded("notes-archive/a.md", settings), "expected false");
+  expect("an unrelated folder is not excluded", !isExcluded("other/a.md", settings), "expected false");
 });
 
 section("normalizeBundleRoots: normalizes, dedupes, sorts longest-first", () => {
@@ -280,8 +308,10 @@ section("relationships: external IRI never flagged, broken relative link warned"
   const baseIri = "https://acme.example/knowledge/";
   const content = `---
 type: Reference
-sameAs: https://www.wikidata.org/wiki/Q1
-references: nonexistent-concept
+sameAs:
+  - https://www.wikidata.org/wiki/Q1
+references:
+  - nonexistent-concept
 ---
 `;
   const issues = check("services/orders.md", content, { baseIri, exists: () => false });
@@ -318,13 +348,42 @@ dependsOn:
 });
 
 section("relationships: a sibling-relative target resolves without a false warning", () => {
-  const content = `---\ntype: Playbook\nrelatedTo: publishing-a-release\n---\n`;
+  const content = `---\ntype: Playbook\nrelatedTo:\n  - publishing-a-release\n---\n`;
   const present = new Set(["playbooks/publishing-a-release.md"]);
   const issues = check("playbooks/contributing.md", content, {
     baseIri: "https://acme.example/knowledge/",
     exists: (p) => present.has(p),
   });
   expect("no relation warning", !issues.some((i) => i.rule === "lokf/4-relations"), show(issues));
+});
+
+// A real audit of this bundle found this mistake in roughly half its concepts
+// (see .lokf/knowledge/log.md, 2026-09-09): the generated schema requires a
+// list for all ten RELATION_FIELDS, so a bare scalar - natural to write, and
+// semantically a single target either way - fails real `lokf validate` even
+// though this plugin previously validated it clean.
+section("relationships: a bare scalar on a named relation field is flagged (schema requires a list)", () => {
+  const baseIri = "https://acme.example/knowledge/";
+  const target = `${baseIri}services/orders-api`;
+  const exists = (p: string) => p === "services/orders-api.md";
+
+  const scalar = check("services/a.md", `---\ntype: Reference\ndependsOn: ${target}\n---\n`, { baseIri, exists });
+  expect(
+    "scalar form warns, naming the field",
+    warnings(scalar) === 1 && (scalar[0]?.message.includes("dependsOn") ?? false) && (scalar[0]?.message.includes("list") ?? false),
+    show(scalar)
+  );
+
+  const list = check("services/a.md", `---\ntype: Reference\ndependsOn:\n  - ${target}\n---\n`, { baseIri, exists });
+  expect("list form of the same target is clean", warnings(list) === 0, show(list));
+
+  // relations[].target is a single reified relation's own target, never
+  // itself multivalued - the "must be a list" rule must not reach it.
+  const reified = check("misc/a.md", `---\ntype: Reference\nrelations:\n  - predicate: joinsWith\n    target: ${target}\n---\n`, {
+    baseIri,
+    exists,
+  });
+  expect("relations[].target is unaffected", warnings(reified) === 0, show(reified));
 });
 
 section("relations: predicate without a target is flagged", () => {
@@ -345,6 +404,29 @@ section("unknown type: warning, never an error", () => {
     errors(issues) === 0 && warnings(issues) === 1 && issues[0]?.rule === "lokf/3-vocab",
     show(issues)
   );
+});
+
+section("a non-string type is a shape warning, not silence", () => {
+  // A list or mapping where LOKF expects a single class name is a genuine
+  // shape mistake - unlike a coercible scalar, which reads as text (YAML's
+  // `type: 123` is exactly as unquoted as `lokf_version: 0.2` elsewhere in
+  // this suite) and falls through to the ordinary vocabulary warning.
+  const list = check("misc/thing.md", `---\ntype:\n  - Service\n---\n`);
+  expect(
+    "a list type warns about shape, not vocabulary",
+    errors(list) === 0 && warnings(list) === 1 && list[0]?.rule === "lokf/3-vocab" && (list[0]?.message.includes("list") ?? false),
+    show(list)
+  );
+
+  const numeric = check("misc/thing.md", `---\ntype: 123\n---\n`);
+  expect(
+    "a numeric type reads as text and hits the vocabulary warning",
+    errors(numeric) === 0 && warnings(numeric) === 1 && (numeric[0]?.message.includes('"123"') ?? false),
+    show(numeric)
+  );
+
+  const missing = check("misc/thing.md", `---\ntitle: No type at all\n---\n`);
+  expect("a genuinely missing type stays silent (OKF's error to raise)", missing.length === 0, show(missing));
 });
 
 section("spaced 'Attested Computation' normalizes to the vocabulary class", () => {

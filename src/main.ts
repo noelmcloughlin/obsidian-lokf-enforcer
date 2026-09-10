@@ -371,13 +371,15 @@ export default class LokfPlugin extends Plugin {
       for (const root of configuredRoots) {
         const rootIndexPath = this.rootIndexPathFor(root);
         const hiddenSegment = hiddenRootSegment(root);
+        // synthetic: true on all three - none of these paths were part of
+        // `files`, so the report view must not count them against "clean".
         if (hiddenSegment) {
-          results.push({ path: rootIndexPath, issues: hiddenRootIssues(root, hiddenSegment) });
+          results.push({ path: rootIndexPath, issues: hiddenRootIssues(root, hiddenSegment), synthetic: true });
         } else if (root && !(this.app.vault.getAbstractFileByPath(root) instanceof TFolder)) {
-          results.push({ path: rootIndexPath, issues: missingBundleRootIssues(root) });
+          results.push({ path: rootIndexPath, issues: missingBundleRootIssues(root), synthetic: true });
         } else if (!(this.app.vault.getAbstractFileByPath(rootIndexPath) instanceof TFile)) {
           const issues = missingRootIndexIssues(this.settings, rootIndexPath);
-          if (issues.length) results.push({ path: rootIndexPath, issues });
+          if (issues.length) results.push({ path: rootIndexPath, issues, synthetic: true });
         }
       }
 
@@ -427,6 +429,17 @@ export default class LokfPlugin extends Plugin {
     if (!this.isConcept(file)) {
       // Leaving the previous note's findings up would attribute them to this one.
       this.setActiveResult(null);
+      // The debounced file-open path calls this too, with notify=false - that
+      // one fires on every navigation, so silence there is deliberate. Only
+      // an explicit ask (the command, or the status-bar click) gets told why
+      // nothing happened; both callers already require a .md file, so the
+      // only two reasons left are exclusion and being outside every bundle.
+      if (notify) {
+        const reason = isExcluded(file.path, this.settings)
+          ? "it is in an excluded folder"
+          : "it is outside every configured bundle root";
+        new Notice(`LOKF: not validated - ${reason}.`);
+      }
       return;
     }
     const root = this.resolveRoot(file.path) ?? "";
