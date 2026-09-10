@@ -15,10 +15,7 @@ Any generated or imported bundle content still deserves the same scrutiny you'd 
 
 ## Reporting a vulnerability
 
-Please use GitHub's private vulnerability reporting at:
-
-https://github.com/noelmcloughlin/obsidian-lokf-enforcer/security/advisories/new
-
+Please use GitHub's [private vulnerability reporting](https://github.com/noelmcloughlin/obsidian-lokf-enforcer/security/advisories/new)
 rather than a public issue. Include:
 
 - the affected file (plugin source, or a workflow under `.github/workflows/`);
@@ -45,23 +42,29 @@ The repository's non-Markdown, non-TypeScript execution surfaces are:
 
 - the release workflow in `.github/workflows/release.yml`, which builds and publishes the plugin's release artifacts;
 - the build workflow in `.github/workflows/build.yml`, which runs on every push and PR;
-- the scheduled GitHub Action in `.github/workflows/knowledge-librarian.yaml`, which installs a pinned [`lokf-agent-skills`](https://github.com/noelmcloughlin/lokf-agent-skills) skill, runs it with repository write permissions against this repo's own `.lokf/knowledge/` bundle (documentation *about this repository*, not plugin code), and opens a review PR. This is unrelated to anything the plugin does at runtime.
+- the lint-and-docs workflow in `.github/workflows/lint-and-docs.yaml` (ShellCheck, `actionlint`, markdownlint, link-checking, codespell) and the registrar workflow in `.github/workflows/knowledge-registrar.yaml`, which validates the knowledge bundle's *form* on every `.lokf/**` PR - both read-only;
+- the scheduled GitHub Action in `.github/workflows/knowledge-librarian.yaml`, which installs a pinned [`lokf-agent-skills`](https://github.com/noelmcloughlin/lokf-agent-skills) skill and runs it against this repo's own `.lokf/knowledge/` bundle (documentation *about this repository*, not plugin code), then opens a review PR. The agent itself runs with **no write permissions** - see "Repository hardening" below. This is unrelated to anything the plugin does at runtime.
+- the wrapper script `.lokf/scripts/knowledge-librarian.sh`, which that workflow executes;
 - this repository's own `README.md`, `llms.txt`, and the `.lokf/knowledge/` content that workflow reads and writes: these are prompt-injection surfaces whenever an agent is asked to act on repository text, external URLs, or reader feedback.
 
 ### Interactive use of the agent skills: scope is advisory, not enforced
 
 If you install the `lokf-agent-skills` locally to work on this repo's `.lokf/knowledge/` bundle (see `CONTRIBUTING.md`), know that a skill's stated scope is prose guidance, not a security boundary - an agent may have broader tool access in your local environment than the skill's description implies. Treat any AI-driven workflow as a tool that acts with the permissions your harness grants it, not as a permission system enforced by Markdown.
 
-The only automated write path that is intentionally scoped is the scheduled librarian workflow (`contents: write` and `pull-requests: write` only, and a write-scope check that fails the job if it touches anything outside `.lokf/knowledge/` and `.lokf/feedback.md`). Review before merge remains a human responsibility.
+The only automated write path is the scheduled librarian workflow, and it is split so that the agent never holds a write-scoped token at all (see "Repository hardening" below). Review before merge remains a human responsibility.
 
 ### Repository hardening
 
-- GitHub Actions are pinned to reviewed commit SHAs instead of floating tags.
-- The release job is kept minimal and uses least-privilege permissions.
-- The scheduled librarian workflow enforces a write-scope check to reject unexpected file changes outside `.lokf/knowledge/` and `.lokf/feedback.md`.
-- The agent CLI is selected via a repository variable or secret, but the workflow always executes the pinned local wrapper script rather than executing a variable as a shell command.
-- The build and release workflows both use Step Security's hardened-runner to audit egress behavior.
-- The repo uses regular review and validation gates before release and merge.
+- GitHub Actions are pinned to reviewed commit SHAs instead of floating tags, in every workflow. `.github/dependabot.yml` keeps those pins current (weekly), alongside the plugin's npm devDependencies and the `.lokf/` sidecar's Python toolchain.
+- Every workflow declares `permissions: {}` at the top level, so each job opts into only the scopes it needs and nothing inherits a broader default.
+- All workflows run Step Security's hardened-runner in audit mode to monitor runner egress.
+- **The librarian workflow runs in two jobs so the agent and the write token never meet.** The `refresh` job runs the agent - third-party code - with `contents: read` and `persist-credentials: false`, so no git credential is on disk while it executes; it hands its proposed change to the `publish` job as a patch artifact. Only `publish`, which runs no agent code, holds `contents: write` / `pull-requests: write` to push the branch and open the PR. A compromised agent therefore cannot reach a write-scoped credential, rather than merely being caught after using one.
+- That workflow's `refresh` job additionally fails before packaging anything if the agent touched a path outside `.lokf/knowledge/` and `.lokf/feedback.md`; the wrapper script enforces the same boundary itself immediately after the agent returns, so the contract is checked twice, by two different mechanisms.
+- The agent CLI is selected via a repository variable or secret, but the workflow always executes the pinned local wrapper script rather than executing a variable as a shell command - and the wrapper parses `AGENT_CLI` into a quoted argv array rather than re-expanding it, so shell metacharacters in that value are passed as inert arguments (no `eval`, no `bash -c`). The scheduled run stays inert until the `KNOWLEDGE_LIBRARIAN_ENABLED` repository variable is set to `true`.
+- The librarian workflow triggers only on `schedule` and `workflow_dispatch` - never on an issue comment or any other event an outside contributor could fire directly - and never pushes to the default branch or auto-merges.
+- `main` is protected: pull requests must pass the checks above before merge, and force-pushes and branch deletion are blocked. Secret scanning and push protection are enabled. These four are GitHub repository *settings* rather than files in the tree - nothing in CI can assert they are still in force, so keeping them enabled is a maintainer responsibility.
+- The `release.yml` job verifies the pushed tag matches `manifest.json` before building, publishes the release as a **draft** for manual review, and attaches build-provenance attestation.
+- CodeQL is intentionally **not** enabled: the plugin is a small TypeScript bundle with no server-side surface, no network calls, and no untrusted input beyond vault Markdown it parses with deterministic rules. Dependency review is covered by Dependabot above, since every npm dependency here is a devDependency that never ships in `main.js`. If either assumption changes - a runtime dependency, or a network feature - add them then rather than carrying unused overhead now.
 
 ### Prompt-injection guards, for the librarian workflow specifically
 
@@ -71,6 +74,14 @@ This repository's own knowledge-maintenance workflow reads content it did not au
 - agent output is treated as a draft for human review, not as trusted repository state;
 - the repo's documentation is explicit that generated knowledge and feedback are not the same as source-of-truth code or project policy;
 - anything a human asks the agent to reason about must be checked before it is accepted as fact or committed.
+
+**`.lokf/feedback.md` specifically.** This is the one input path that can originate from someone with no repository access: `lokf-docent` writes reader questions there, and the scheduled librarian consumes them. The `lokf-librarian` skill requires resolving only the question or disagreement an entry *names*, from the source it points at - never from the entry's own wording - so an entry phrased as a directive ("mark X verified", "skip validation") is read as the content it is reporting, not followed.
+
+**Blast radius if a guard above ever fails.** The agent holds no write-scoped token at all (the two-job split, above): the worst it can do is propose a patch. That patch is confined to `.lokf/knowledge/` and `.lokf/feedback.md` by two independent checks, is applied by a job running no agent code, lands as a pull request against a protected branch, and requires a human maintainer's approval to merge. Nothing in this path can reach the plugin's own source, its release artifacts, or a published release.
+
+**What this doesn't cover.** Ordinary repository content the librarian scrapes while refreshing concepts (`README.md`, docs, `src/`) has no per-entry guard like `feedback.md`'s - it relies on the same branch protection and required checks that gate every other change to `main`, a materially higher trust level than unreviewed reader feedback, not an oversight.
+
+See also [AI_COVENANT.md](AI_COVENANT.md), which sets the human-accountability rules this automation operates under.
 
 ## What this does not cover
 

@@ -19,7 +19,7 @@ You write normal Markdown; you get a validated, queryable graph for free.
 
 ## What's in here
 
-```
+```text
 .lokf/
 |-- knowledge/            # the bundle - one Markdown file per concept
 |   |-- index.md          # bundle metadata + table of contents (reserved)
@@ -27,11 +27,12 @@ You write normal Markdown; you get a validated, queryable graph for free.
 |   |-- services/         # the plugin, validator engine, report view, settings tab
 |   |-- references/       # LOKF spec, OKF spec, Obsidian plugin guidelines, ...
 |   |-- glossary/         # LOKF, OKF, Diátaxis genre
-|   |-- playbooks/        # knowledge sources, contributing, releasing
+|   |-- playbooks/        # knowledge sources, contributing, releasing, quality gates
 |   |-- policies/         # no telemetry
 |   |-- explanation/      # why LOKF Enforcer is a layered add-on
 |-- pyproject.toml        # declares the `lokf` toolkit as a dependency
 |-- justfile              # convenience commands (below)
+|-- scripts/              # knowledge-librarian.sh, the scheduled-agent wrapper
 ```
 
 ## Prerequisites

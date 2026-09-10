@@ -143,6 +143,12 @@ scripts/
 
 This repository keeps a LOKF bundle of its own under `.lokf/knowledge/` - documentation about the plugin, in the format the plugin checks. It is maintained by the [lokf-agent-skills](https://github.com/noelmcloughlin/lokf-agent-skills), which a scheduled [workflow](.github/workflows/knowledge-librarian.yaml) installs at run time (they are never committed - `.agents/`, `.claude/`, and `skills-lock.json` are git-ignored). **None of this is part of the plugin, and you don't need any skill to use it.** If you want to contribute to that bundle, [CONTRIBUTING.md](CONTRIBUTING.md#agent-skills-optional---only-for-editing-this-repos-own-lokf-bundle) says which skills that takes.
 
+The plugin works the registrar's desk inside Obsidian; this repository staffs the same desk in CI. The [`lokf`](https://pypi.org/project/lokf/) toolkit keeps the bundle's records well-formed on every change, and [`knowledge-registrar.yaml`](.github/workflows/knowledge-registrar.yaml) does it again on every pull request that touches `.lokf/**`. Like the plugin, it reaches no verdict of its own - it checks that a record is properly formed and provenanced, never whether what the record says is true. That judgement belongs to a person, through [LOKF Curator](https://github.com/noelmcloughlin/obsidian-lokf-curator) or the `lokf-curator` skill.
+
+## Contributing
+
+[CONTRIBUTING.md](CONTRIBUTING.md) covers the dev setup and the pre-PR checklist; participation is covered by the [Code of Conduct](CODE_OF_CONDUCT.md), and [AI_COVENANT.md](AI_COVENANT.md) sets out how AI-assisted contributions are handled here.
+
 ## Security
 
 Please review the repository security policy at [SECURITY.md](SECURITY.md) before using the agent-driven knowledge workflow or GitHub automation in this repo.
