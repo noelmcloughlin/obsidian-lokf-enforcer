@@ -7,9 +7,7 @@
   bundle uses. The plugin's own scaffold template (`src/main.ts`,
   `scaffold-root-header`) carried the same mismatch and was fixed alongside.
 * **Corrected** `playbooks/releasing.md`'s `resource`: it describes the
-  PR-based version-bump flow but cited `PUBLISHING.md`, which documents
-  community-store submission and a direct tag flow; the PR-based flow it
-  actually summarizes is in `CONTRIBUTING.md`.
+  PR-based version-bump flow now cites `CONTRIBUTING.md`.
 
 ## 2026-09-09
 * **Bug fixed**: 6 concepts carried a bare-scalar value on a multivalued

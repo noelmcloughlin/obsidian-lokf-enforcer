@@ -11,9 +11,8 @@ generated:
 
 # Overview
 
-Enforced in this repo via `eslint-plugin-obsidianmd` (`eslint.config.mts`) and
-cited directly in `PUBLISHING.md`'s rejection-reasons list: no
-`innerHTML`/inline styles, no HTML heading elements in a settings tab
+Enforced in this repo via `eslint-plugin-obsidianmd` (`eslint.config.mts`):
+no `innerHTML`/inline styles, no HTML heading elements in a settings tab
 (`new Setting(...).setHeading()` instead), no detaching leaves in `onunload`
 (this plugin has none - Obsidian cleans up views, commands, and
 `registerEvent` handlers on its own), sentence-case UI text, and no plugin id

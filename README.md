@@ -21,7 +21,7 @@ Click it, or run **Validate vault** from the command palette, and a side panel o
 
 ## Install
 
-Not yet in the community store - the first release is in preparation (see [PUBLISHING.md](PUBLISHING.md) for the submission path). Until it lands, the options are:
+Not yet in the community store - the first release is in preparation. Until it lands, the options are:
 
 - **From source** - `npm ci && npm run build`, then copy `main.js`, `manifest.json`, and `styles.css` into `<vault>/.obsidian/plugins/lokf-enforcer/` and enable the plugin under **Settings → Community plugins**.
 - **From a GitHub release** - once one is published, the same three files are attached to it; copy them to the same place.
@@ -88,7 +88,7 @@ Required `type`, `generated`/`verified` provenance and trust, `status`/`stale_af
 
 The companion [lokf-agent-skills](https://github.com/noelmcloughlin/lokf-agent-skills) project describes four levels of trust a claim in a bundle can earn: **schema-valid** (the frontmatter is well-formed and its relations resolve), **source-consistent** (an agent re-checked it against its source), **human-confirmed** (a named person vouches for it), and **proven-in-use** (a real question got answered from it). This plugin checks the first tier - schema-valid, and only the LOKF slice of it - as you write, inside the editor. It cannot tell you whether a claim is *true*; that takes a librarian pass and a curator's review.
 
-**None of that is a dependency.** The skills are optional companions, not a requirement. This plugin reads Markdown and YAML and works on any LOKF bundle however it was produced - by hand, by the `lokf` CLI, or by the skills - and it never requires, loads, or calls into a skill, an agent, or another plugin, exactly as it never calls into an OKF validator (above). The skills, in turn, do not need this plugin: `lokf validate` remains the gate they rely on. The only thing the two share is the LOKF specification. Maintaining a bundle - scaffolding it, keeping it in sync with its source, having a person confirm it - is the job of the skills (`lokf-scaffolding` / `lokf-librarian` / `lokf-curator` / `lokf-docent`); this plugin is their in-editor counterpart, the same schema checked immediately while you write.
+**None of that is a dependency.** The skills are optional companions, not a requirement. This plugin reads Markdown and YAML and works on any LOKF bundle however it was produced - by hand, by the `lokf` CLI, or by the skills - and it never requires, loads, or calls into a skill, an agent, or another plugin, exactly as it never calls into an OKF validator (above). The skills, in turn, do not need this plugin: `lokf validate` remains the gate they rely on. The only thing the two share is the LOKF specification. The skills are agent tooling for a *code repository* - deriving a bundle from source, keeping it in sync, having a person confirm it; this plugin is the in-editor counterpart of one thing they do, the schema check, run immediately while you write.
 
 ### Philosophy: warnings, not errors, almost everywhere
 
@@ -124,17 +124,11 @@ scripts/
 - The [LinkML Community](https://linkml.io/), creators of [LinkML](https://linkml.io/linkml/), the schema language LOKF is written in.
 - [obsidian-sample-plugin](https://github.com/obsidianmd/obsidian-sample-plugin), whose build/lint/release layout this repository follows.
 - [OKF Enforcer](https://github.com/MartinForReal/okf-enforcer) by MartinForReal - the OKF v0.2 validator this plugin is designed to sit beside, and whose bundle header is a smoke-test fixture here.
-- [lokf-agent-skills](https://github.com/noelmcloughlin/lokf-agent-skills) - the scaffolding / librarian / curator / docent skills whose trust model this README borrows, and whose scaffolding templates the smoke test validates.
+- [lokf-agent-skills](https://github.com/noelmcloughlin/lokf-agent-skills) - the agent skills whose trust model this README borrows, and whose bundle template the smoke test validates.
 
-## Agent skills are installed, not committed
+## About this repository's own knowledge bundle
 
-The four LOKF skills are runtime state, not source - their own guidance says so - so `.agents/`, `.claude/`, and `skills-lock.json` are git-ignored. The scheduled [`knowledge-librarian.yaml`](.github/workflows/knowledge-librarian.yaml) workflow installs the pinned `lokf-librarian` skill at run time, and `npm run smoke-test` validates a frozen copy of the scaffolding skeleton under `scripts/fixtures/`. To use the skills locally, install them once, pinned to one release ([GitHub CLI](https://cli.github.com/manual/gh_skill_install) 2.90+):
-
-```bash
-for s in lokf-scaffolding lokf-librarian lokf-curator lokf-docent; do
-  gh skill install noelmcloughlin/lokf-agent-skills "$s@v0.9.0"
-done
-```
+This repository keeps a LOKF bundle of its own under `.lokf/knowledge/` - documentation about the plugin, in the format the plugin checks. It is maintained by the [lokf-agent-skills](https://github.com/noelmcloughlin/lokf-agent-skills), which a scheduled [workflow](.github/workflows/knowledge-librarian.yaml) installs at run time (they are never committed - `.agents/`, `.claude/`, and `skills-lock.json` are git-ignored). **None of this is part of the plugin, and you don't need any skill to use it.** If you want to contribute to that bundle, [CONTRIBUTING.md](CONTRIBUTING.md#agent-skills-optional---only-for-editing-this-repos-own-lokf-bundle) says which skills that takes.
 
 ## Security
 
