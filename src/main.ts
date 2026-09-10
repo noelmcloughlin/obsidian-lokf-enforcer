@@ -16,6 +16,12 @@ import { LokfSettingTab } from "./settings";
 const SIBLING_PLUGIN_ID = "okf-enforcer";
 const ROOT_INDEX = "index.md";
 
+/** Not a LOKF rule - a file the vault refused to hand over. Reported rather
+ *  than dropped, so an unreadable note can never read as a clean one. */
+function unreadableIssues(): LokfIssue[] {
+  return [{ severity: "error", rule: "lokf/io-unreadable", message: "Could not be read - no LOKF rules ran." }];
+}
+
 interface ParsedNote {
   hasFm: boolean;
   data: Record<string, unknown>;
@@ -145,11 +151,26 @@ export default class LokfPlugin extends Plugin {
     if (path === ROOT_INDEX) this.baseIriLoaded = false;
   }
 
+  /** Null = the vault could not hand the file over. For the single-file paths,
+   *  where an escaping throw would surface only as an unhandled rejection. The
+   *  vault scan deliberately does NOT use this - it lets the read throw so
+   *  processQueue can attribute the failure to that file. */
+  private async readOrNull(file: TFile): Promise<string | null> {
+    try {
+      return await this.app.vault.read(file);
+    } catch {
+      return null;
+    }
+  }
+
   private async findRootBaseIri(): Promise<string | null> {
     if (this.baseIriLoaded) return this.baseIri;
     const rootIndex = this.app.vault.getAbstractFileByPath(ROOT_INDEX);
     if (rootIndex instanceof TFile) {
-      const parsed = this.parseNote(await this.app.vault.read(rootIndex));
+      // An unreadable root index reads as "no base_iri" rather than taking the
+      // scan down with it; the scan then reports it like any other bad file.
+      const content = await this.readOrNull(rootIndex);
+      const parsed = content === null ? null : this.parseNote(content);
       this.baseIri = parsed ? readBaseIri(parsed.data) : null;
     } else {
       this.baseIri = null;
@@ -184,16 +205,25 @@ export default class LokfPlugin extends Plugin {
     return validateLokfConcept(path, parsed.hasFm, parsed.data, isRoot, baseIri, this.settings, this.exists);
   }
 
-  private async processQueue<T>(items: T[], worker: (item: T) => Promise<void>, label?: string): Promise<void> {
+  /** Returns the items whose worker call threw, so a dropped file is reported
+   *  as unreadable rather than silently missing from "scanned N notes". */
+  private async processQueue<T>(items: T[], worker: (item: T) => Promise<void>, label?: string): Promise<T[]> {
     const size = Math.max(1, this.settings.batchSize | 0);
     const showBar = !!label && items.length > size;
     const view = showBar ? this.getReportView() : null;
     if (showBar && label) view?.showProgress(label);
     const baseStatus = this.statusEl.getText();
+    const failed: T[] = [];
 
     for (let i = 0; i < items.length; i += size) {
       const batch = items.slice(i, i + size);
-      await Promise.all(batch.map((it) => worker(it).catch(() => {})));
+      await Promise.all(
+        batch.map((it) =>
+          worker(it).catch(() => {
+            failed.push(it);
+          })
+        )
+      );
       if (showBar) {
         const done = Math.min(i + size, items.length);
         const frac = done / items.length;
@@ -206,6 +236,7 @@ export default class LokfPlugin extends Plugin {
       view?.hideProgress();
       this.statusEl.setText(baseStatus);
     }
+    return failed;
   }
 
   async scanVault(reveal = true, silent = false): Promise<void> {
@@ -218,7 +249,7 @@ export default class LokfPlugin extends Plugin {
       const baseIri = await this.findRootBaseIri();
       const files = this.candidateFiles();
       const results: FileResult[] = [];
-      await this.processQueue(
+      const unreadable = await this.processQueue(
         files,
         async (f) => {
           const content = await this.app.vault.read(f);
@@ -227,6 +258,7 @@ export default class LokfPlugin extends Plugin {
         },
         silent ? undefined : "LOKF: scanning"
       );
+      for (const f of unreadable) results.push({ path: f.path, issues: unreadableIssues() });
 
       // A bundle with no root index.md declares no header at all, so there is no
       // file for that finding to land on - without this it would be the one
@@ -250,7 +282,12 @@ export default class LokfPlugin extends Plugin {
 
       if (reveal && !silent) await this.activateView();
       if (!silent) {
-        new Notice(`LOKF: scanned ${files.length} notes - ${errFiles} with errors, ${warnFiles} with warnings only.`);
+        // The unreadable files are part of errFiles - the parenthetical says
+        // how many of those failed to be read rather than failing a rule.
+        const unreadableNote = unreadable.length ? ` (${unreadable.length} unreadable)` : "";
+        new Notice(
+          `LOKF: scanned ${files.length} notes - ${errFiles} with errors${unreadableNote}, ${warnFiles} with warnings only.`
+        );
       }
     } finally {
       this.busy = false;
@@ -259,6 +296,9 @@ export default class LokfPlugin extends Plugin {
 
   private renderResults(results: FileResult[], scanned: number): void {
     const view = this.getReportView();
+    // If the view is closed and a second scan lands before it reopens, this
+    // overwrites the earlier pending result - intentional, since only the
+    // latest scan is ever worth showing.
     if (view) view.setResults(results, scanned);
     else this.pendingResults = { results, scanned };
   }
@@ -277,7 +317,12 @@ export default class LokfPlugin extends Plugin {
       return;
     }
     const baseIri = await this.findRootBaseIri();
-    const content = await this.app.vault.read(file);
+    const content = await this.readOrNull(file);
+    if (content === null) {
+      this.setActiveResult({ path: file.path, issues: unreadableIssues() });
+      if (notify) new Notice("LOKF: could not read this note.");
+      return;
+    }
     const issues = this.issuesFor(file.path, content, this.isRoot(file), baseIri);
     this.setActiveResult({ path: file.path, issues });
     if (notify) {
@@ -369,7 +414,17 @@ export default class LokfPlugin extends Plugin {
 
   private async scaffoldRootHeader(): Promise<void> {
     const rootIndex = this.app.vault.getAbstractFileByPath(ROOT_INDEX);
-    const content = rootIndex instanceof TFile ? await this.app.vault.read(rootIndex) : "";
+    let content = "";
+    if (rootIndex instanceof TFile) {
+      // Treating an unreadable index.md as empty would prepend the template to
+      // "" and write that back, destroying whatever the file actually held.
+      const read = await this.readOrNull(rootIndex);
+      if (read === null) {
+        new Notice("LOKF: could not read index.md - leaving it untouched.");
+        return;
+      }
+      content = read;
+    }
     const { hasFm } = splitFrontmatter(content);
     if (hasFm) {
       new Notice("LOKF: root index.md already has frontmatter - add the LOKF header fields manually to avoid clobbering it.");
@@ -385,14 +440,21 @@ description: TODO
 license: https://creativecommons.org/licenses/by/4.0/
 publisher:
   type: Person
-  id: https://your-domain.example/knowledge/org/you
+  id: https://your-domain.example/knowledge/person/you
   name: TODO
 ---
 
 `;
     const newContent = template + content;
-    if (rootIndex instanceof TFile) await this.app.vault.modify(rootIndex, newContent);
-    else await this.app.vault.create(ROOT_INDEX, newContent);
+    try {
+      if (rootIndex instanceof TFile) await this.app.vault.modify(rootIndex, newContent);
+      else await this.app.vault.create(ROOT_INDEX, newContent);
+    } catch {
+      // The command is fired with `void`, so without this a failed write would
+      // report nothing to the user and surface only as an unhandled rejection.
+      new Notice("LOKF: could not write index.md - the semantic header was not inserted.");
+      return;
+    }
     this.invalidateBaseIri(ROOT_INDEX);
     new Notice("LOKF: inserted a semantic header template into index.md - replace the placeholder base_iri before publishing.");
   }

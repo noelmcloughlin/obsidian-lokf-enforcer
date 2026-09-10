@@ -32,7 +32,8 @@ node_modules/
 
 # local sample/test vault (never published)
 -sample-vault/
-# Installed agent runtime state is local to the consuming repo, not source content.
-.agents/
+
+# .agents/skills/ + skills-lock.json are committed (installed LOKF skills the
+# repo depends on, pinned by hash - see MYPLAN.md Phase 3); .claude/ is local
+# session state only.
 .claude/
-skills-lock.json
