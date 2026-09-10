@@ -3,3 +3,6 @@
 __pycache__/
 *.pyc
 lokf-tables/
+
+# Obsidian's per-vault config, written when knowledge/ is opened as a vault
+knowledge/.obsidian/
