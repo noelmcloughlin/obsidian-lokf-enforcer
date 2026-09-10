@@ -29,6 +29,14 @@ export interface LokfSettings {
   excludeFolders: string[];
   batchSize: number;
   recommendSiblingPlugin: boolean;
+  /** Vault-relative folders, each the root (index.md, own base_iri/ids) of its
+   *  own bundle. Empty means the whole vault is one implicit bundle - the
+   *  usual Obsidian setup. Non-empty lets one vault hold several independent
+   *  bundles as sibling project folders - the Obsidian-native "one vault,
+   *  many folders" pattern - rather than forcing a `.lokf/knowledge/`-style
+   *  bundle to be opened as its own vault. A note outside every configured
+   *  root is not scanned. */
+  bundleRoots: string[];
 }
 
 export const KNOWN_LOKF_TYPES = [
@@ -97,7 +105,96 @@ export const DEFAULT_SETTINGS: LokfSettings = {
   excludeFolders: [],
   batchSize: 50,
   recommendSiblingPlugin: true,
+  bundleRoots: [],
 };
+
+/** Settles the spellings a person plausibly types for one folder onto the
+ *  single form Obsidian's vault paths use: forward slashes, no leading or
+ *  trailing slash or whitespace, no doubled slashes, no `./` segments. So
+ *  "/knowledge/", " knowledge ", ".\knowledge", "./knowledge" and
+ *  "knowledge" all become "knowledge". (`..` is left alone - it can't name a
+ *  vault folder, so it falls through to the missing-root check and is
+ *  reported as not existing, which is the honest message for it.) */
+export function normalizeBundleRoot(value: string): string {
+  return value
+    .replace(/\\/g, "/")
+    .split("/")
+    .map((segment) => segment.trim())
+    .filter((segment) => segment !== "" && segment !== ".")
+    .join("/");
+}
+
+/**
+ * The first path segment beginning with a dot, or null if there is none.
+ *
+ * Obsidian's file index never lists a folder whose name starts with a dot, so
+ * a bundle root inside one (`.lokf/knowledge`, the sidecar convention) is
+ * invisible to this and every other plugin - a scan of it would silently find
+ * nothing. Callers report the segment rather than scanning into the void.
+ */
+export function hiddenRootSegment(bundleRoot: string): string | null {
+  const root = normalizeBundleRoot(bundleRoot);
+  if (!root) return null;
+  return root.split("/").find((segment) => segment.startsWith(".")) ?? null;
+}
+
+// ---- Multi-bundle-root resolution ----
+//
+// A vault may configure several bundle roots (one vault, several sibling
+// project folders, each its own bundle) or none (the whole vault is the one
+// implicit bundle). This is pure path algebra - no Obsidian dependency - so
+// it lives here rather than in main.ts, exactly like the rest of this file.
+
+/** Normalizes and deduplicates a list of configured bundle roots, sorted
+ *  longest-first so `resolveBundleRoot`'s first prefix match is always the
+ *  most specific one for a path under a nested root. A blank entry (after
+ *  normalizing) drops out silently - it would otherwise collide with the "no
+ *  roots configured" case, which means something different (the whole vault,
+ *  rather than one configured root that happens to be the vault root). */
+export function normalizeBundleRoots(roots: string[]): string[] {
+  const seen = new Set<string>();
+  for (const entry of roots) {
+    const norm = normalizeBundleRoot(entry);
+    if (norm) seen.add(norm);
+  }
+  return [...seen].sort((a, b) => b.length - a.length);
+}
+
+/**
+ * Which configured bundle a vault-relative path belongs to.
+ *
+ * Returns that bundle's root path; `""` for the implicit whole-vault bundle
+ * when `roots` is empty (no explicit roots configured); or `null` when
+ * explicit roots are configured and the path sits under none of them - it
+ * belongs to no bundle and is not scanned at all.
+ *
+ * `roots` must already be normalized and sorted longest-first (see
+ * `normalizeBundleRoots`) - this function does not sort, so it stays cheap to
+ * call once per candidate file during a scan.
+ */
+export function resolveBundleRoot(vaultPath: string, roots: string[]): string | null {
+  if (roots.length === 0) return "";
+  for (const root of roots) {
+    if (vaultPath === root || vaultPath.startsWith(root + "/")) return root;
+  }
+  return null;
+}
+
+export function bundleRootIndexPath(root: string): string {
+  return root ? `${root}/index.md` : "index.md";
+}
+
+/** Strips `root`'s prefix so validator.ts's rule functions - which know
+ *  nothing about bundle roots - always see paths relative to the bundle
+ *  being validated, exactly as when a bundle root was necessarily the vault
+ *  root. The inverse of `toVaultPath`. */
+export function toBundlePath(vaultPath: string, root: string): string {
+  return root && vaultPath.startsWith(root + "/") ? vaultPath.slice(root.length + 1) : vaultPath;
+}
+
+export function toVaultPath(bundlePath: string, root: string): string {
+  return root ? `${root}/${bundlePath}` : bundlePath;
+}
 
 const FM_RE = /^---\r?\n([\s\S]*?)\r?\n---/;
 const SCHEME_RE = /^[a-z][a-z0-9+.-]*:/i;
@@ -204,16 +301,16 @@ function matchesDomainList(host: string, list: string[]): boolean {
   });
 }
 
-/** Raised for a vault with no bundle-root index.md at all - there is no file to
- *  hang the missing-header finding on, so the caller synthesizes one. */
-export function missingRootIndexIssues(settings: LokfSettings): LokfIssue[] {
+/** Raised for a bundle with no root index.md at all - there is no file to hang
+ *  the missing-header finding on, so the caller synthesizes one. The path is
+ *  passed in because the bundle root need not be the vault root. */
+export function missingRootIndexIssues(settings: LokfSettings, rootIndexPath = "index.md"): LokfIssue[] {
   if (!settings.warnMissingHeader) return [];
   return [
     {
       severity: "warning",
       rule: "lokf/2-header",
-      message:
-        "This vault has no root index.md, so it declares no LOKF semantic header (lokf_version, base_iri, context, …) and no concept ids can be minted or checked.",
+      message: `There is no ${rootIndexPath}, so this bundle declares no LOKF semantic header (lokf_version, base_iri, context, …) and no concept ids can be minted or checked.`,
     },
   ];
 }

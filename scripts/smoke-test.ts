@@ -13,6 +13,13 @@ import { load as loadYaml } from "js-yaml";
 import {
   validateLokfConcept,
   missingRootIndexIssues,
+  normalizeBundleRoot,
+  hiddenRootSegment,
+  normalizeBundleRoots,
+  resolveBundleRoot,
+  bundleRootIndexPath,
+  toBundlePath,
+  toVaultPath,
   readBaseIri,
   splitFrontmatter,
   mintExpectedId,
@@ -133,6 +140,129 @@ section("vault with no root index.md at all", () => {
     missingRootIndexIssues({ ...DEFAULT_SETTINGS, warnMissingHeader: false }).length === 0,
     "expected none"
   );
+  expect(
+    "names the configured bundle root, not just the vault root",
+    missingRootIndexIssues(DEFAULT_SETTINGS, "knowledge/index.md")[0]?.message.includes("knowledge/index.md") === true,
+    show(missingRootIndexIssues(DEFAULT_SETTINGS, "knowledge/index.md"))
+  );
+});
+
+section("bundle root normalizes, and a dot-folder root is refused", () => {
+  for (const raw of ["knowledge", "knowledge/", "/knowledge", "  knowledge  ", "///knowledge///"]) {
+    expect(`"${raw}" normalizes to "knowledge"`, normalizeBundleRoot(raw) === "knowledge", normalizeBundleRoot(raw));
+  }
+  expect("blank stays blank (bundle is the vault root)", normalizeBundleRoot("  ") === "", "expected empty");
+  expect("a nested path is preserved", normalizeBundleRoot("projects/foo/") === "projects/foo", "expected projects/foo");
+  // The spellings a person plausibly types, each of which must land on the
+  // exact form Obsidian's vault paths use - or resolveBundleRoot would match
+  // nothing and the folder would be reported as missing.
+  expect("a leading ./ is dropped, not treated as a hidden folder", normalizeBundleRoot("./knowledge") === "knowledge", normalizeBundleRoot("./knowledge"));
+  expect("backslashes become forward slashes", normalizeBundleRoot("projects\\foo") === "projects/foo", normalizeBundleRoot("projects\\foo"));
+  expect("doubled slashes collapse", normalizeBundleRoot("projects//foo") === "projects/foo", normalizeBundleRoot("projects//foo"));
+  expect("whitespace inside the slashes is trimmed too", normalizeBundleRoot("/ knowledge /") === "knowledge", JSON.stringify(normalizeBundleRoot("/ knowledge /")));
+  expect("a bare . is the vault root, not a folder", normalizeBundleRoot(".") === "", JSON.stringify(normalizeBundleRoot(".")));
+  expect("./ is not flagged as a dot-folder either", hiddenRootSegment("./knowledge") === null, String(hiddenRootSegment("./knowledge")));
+
+  // Obsidian's file index never exposes a dot-folder, so these can never be
+  // scanned - they must be reported, never silently walked into.
+  expect("the sidecar convention is caught", hiddenRootSegment(".lokf/knowledge") === ".lokf", "expected .lokf");
+  expect("a dot segment deeper in the path is caught", hiddenRootSegment("a/.hidden/b") === ".hidden", "expected .hidden");
+  expect("a bare dot-folder is caught", hiddenRootSegment(".git") === ".git", "expected .git");
+  expect("an ordinary folder is fine", hiddenRootSegment("knowledge") === null, "expected null");
+  expect("a nested ordinary path is fine", hiddenRootSegment("projects/foo") === null, "expected null");
+  expect("blank (the vault root) is fine", hiddenRootSegment("") === null, "expected null");
+  expect("a dot inside a name is not a dot-folder", hiddenRootSegment("v0.2-knowledge") === null, "expected null");
+});
+
+section("normalizeBundleRoots: normalizes, dedupes, sorts longest-first", () => {
+  expect("no roots configured stays empty", normalizeBundleRoots([]).length === 0, "expected []");
+  expect(
+    "blank and whitespace-only entries drop out",
+    normalizeBundleRoots(["", "   ", "knowledge"]).length === 1,
+    String(normalizeBundleRoots(["", "   ", "knowledge"]))
+  );
+  expect(
+    "differently-spelled duplicates collapse to one",
+    JSON.stringify(normalizeBundleRoots(["knowledge", "knowledge/", " knowledge "])) === JSON.stringify(["knowledge"]),
+    String(normalizeBundleRoots(["knowledge", "knowledge/", " knowledge "]))
+  );
+  expect(
+    "sorted longest-first, so a nested root comes before its parent",
+    JSON.stringify(normalizeBundleRoots(["a", "a/b"])) === JSON.stringify(["a/b", "a"]),
+    String(normalizeBundleRoots(["a", "a/b"]))
+  );
+  expect(
+    "disjoint roots of equal length keep input order (stable sort)",
+    JSON.stringify(normalizeBundleRoots(["projects/a", "projects/b"])) === JSON.stringify(["projects/a", "projects/b"]),
+    String(normalizeBundleRoots(["projects/a", "projects/b"]))
+  );
+});
+
+section("resolveBundleRoot: which configured bundle a path belongs to", () => {
+  expect(
+    "no roots configured: every path is the implicit whole-vault bundle",
+    resolveBundleRoot("anything/at/all.md", []) === "",
+    String(resolveBundleRoot("anything/at/all.md", []))
+  );
+
+  const single = normalizeBundleRoots(["knowledge"]);
+  expect("a path under the one configured root resolves to it", resolveBundleRoot("knowledge/index.md", single) === "knowledge", String(resolveBundleRoot("knowledge/index.md", single)));
+  expect("the root path itself resolves to it", resolveBundleRoot("knowledge", single) === "knowledge", String(resolveBundleRoot("knowledge", single)));
+  expect(
+    "a path outside every configured root resolves to null, not the implicit root",
+    resolveBundleRoot("other/note.md", single) === null,
+    String(resolveBundleRoot("other/note.md", single))
+  );
+  expect(
+    "a same-named prefix that isn't actually inside the root does not match",
+    resolveBundleRoot("knowledge-archive/note.md", single) === null,
+    String(resolveBundleRoot("knowledge-archive/note.md", single))
+  );
+
+  const nested = normalizeBundleRoots(["projects", "projects/a"]);
+  expect(
+    "a path under both an outer and a nested root resolves to the more specific one",
+    resolveBundleRoot("projects/a/index.md", nested) === "projects/a",
+    String(resolveBundleRoot("projects/a/index.md", nested))
+  );
+  expect(
+    "a path under only the outer root falls back to it",
+    resolveBundleRoot("projects/other/note.md", nested) === "projects",
+    String(resolveBundleRoot("projects/other/note.md", nested))
+  );
+
+  const disjoint = normalizeBundleRoots(["projects/a", "projects/b"]);
+  expect("disjoint roots: a path picks its own root", resolveBundleRoot("projects/a/note.md", disjoint) === "projects/a", String(resolveBundleRoot("projects/a/note.md", disjoint)));
+  expect(
+    "disjoint roots: a path under neither is null, not the other root",
+    resolveBundleRoot("projects/c/note.md", disjoint) === null,
+    String(resolveBundleRoot("projects/c/note.md", disjoint))
+  );
+});
+
+section("bundleRootIndexPath / toBundlePath / toVaultPath", () => {
+  expect("empty root's index is the vault root's index.md", bundleRootIndexPath("") === "index.md", bundleRootIndexPath(""));
+  expect("a configured root's index sits inside it", bundleRootIndexPath("projects/a") === "projects/a/index.md", bundleRootIndexPath("projects/a"));
+
+  expect("toBundlePath strips a matching root prefix", toBundlePath("knowledge/services/foo.md", "knowledge") === "services/foo.md", toBundlePath("knowledge/services/foo.md", "knowledge"));
+  expect("toBundlePath is a no-op for the empty (whole-vault) root", toBundlePath("index.md", "") === "index.md", toBundlePath("index.md", ""));
+  expect(
+    "toBundlePath leaves a path alone if it isn't under the given root",
+    toBundlePath("other/note.md", "knowledge") === "other/note.md",
+    toBundlePath("other/note.md", "knowledge")
+  );
+
+  expect("toVaultPath prepends a non-empty root", toVaultPath("services/foo.md", "knowledge") === "knowledge/services/foo.md", toVaultPath("services/foo.md", "knowledge"));
+  expect("toVaultPath is a no-op for the empty root", toVaultPath("index.md", "") === "index.md", toVaultPath("index.md", ""));
+
+  for (const [vaultPath, root] of [
+    ["knowledge/services/foo.md", "knowledge"],
+    ["projects/a/index.md", "projects/a"],
+    ["index.md", ""],
+  ] as const) {
+    const roundTripped = toVaultPath(toBundlePath(vaultPath, root), root);
+    expect(`round-trips through bundle-relative and back: "${vaultPath}" (root "${root}")`, roundTripped === vaultPath, roundTripped);
+  }
 });
 
 section("Table with a bare-string field (structural mistake)", () => {

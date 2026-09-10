@@ -15,7 +15,7 @@ If the [`lokf-agent-skills`](https://github.com/noelmcloughlin/lokf-agent-skills
 
 ## What it looks like
 
-Open a bundle folder as a vault (it has to be the bundle folder itself - see [Usage](#usage) for why), and a status-bar item appears: **LOKF ✓** when everything checks out, **LOKF ⚠ 3** for warnings, **LOKF ✖ 1** the moment something is structurally wrong - a malformed web address where the bundle's `base_iri` should be, a relationship that points nowhere.
+Open a vault that has an `index.md` at its root (or at the [bundle root you configure](#usage)), and a status-bar item appears: **LOKF ✓** when everything checks out, **LOKF ⚠ 3** for warnings, **LOKF ✖ 1** the moment something is structurally wrong - a malformed web address where the bundle's `base_iri` should be, a relationship that points nowhere.
 
 Click it, or run **Validate vault** from the command palette, and a side panel opens: notes grouped by folder, the one you're editing pinned at the top, each finding named in plain language with the file one click away. Nothing is ever silently rejected - see [Philosophy](#philosophy-warnings-not-errors-almost-everywhere).
 
@@ -31,10 +31,16 @@ Requires Obsidian **1.13.0** or later (declarative settings API).
 
 ## Usage
 
-**The vault root is the bundle root.** This plugin scans the whole open vault and treats its top-level `index.md` as the bundle's semantic header; there is no setting for a bundle that lives in a subfolder. Two consequences:
+**By default, the vault root is the bundle root** - the plugin scans the whole open vault and treats its top-level `index.md` as the bundle's semantic header. Two consequences of that default:
 
 - **A bundle inside a software repo** - the `lokf-agent-skills` convention is `.lokf/knowledge/` - must be opened *as its own vault*: **File → Open folder as vault** on the `knowledge/` folder itself. Opening the repository root as a vault does **not** work, because Obsidian's file index skips every folder whose name starts with a dot, so nothing under `.lokf/` is visible to this or any plugin. (Obsidian then writes its `.obsidian/` config folder inside the bundle; this repo's `.lokf/.gitignore` ignores it.)
 - **An ordinary personal vault is left alone.** A note without LOKF fields produces no findings, and a note with no frontmatter at all is the OKF validator's business, not this plugin's. The one thing you will see is a warning that the root `index.md` carries no LOKF header - switch it off under *Settings → Semantic header* if the vault isn't a bundle.
+
+**If your vault holds several project folders and each is its own bundle** - the ordinary Obsidian pattern, one vault for everything, subfolders for projects - list them under *Settings → Scope and performance → Bundle root folders* (comma-separated, e.g. `knowledge, projects/foo`). Each becomes an independent bundle: its own `<folder>/index.md`, its own `base_iri`, ids and relations minted and checked relative to that folder alone. A note outside every listed folder is ignored entirely - as if it didn't exist. Leave the list empty (the default) for the common one-vault-per-bundle case above, where the whole vault is the one bundle.
+
+**A dot-folder can never be a bundle root**, however you set it. Obsidian's file index skips every folder whose name begins with a dot, so `.lokf/knowledge` is invisible to this and every other plugin - the setting rejects such an entry and says why, rather than scanning nothing and reporting a healthy, empty bundle. For a `.lokf/knowledge` bundle, open that folder as its own vault (above).
+
+The **scaffold command** (below) targets whichever bundle the active note belongs to; with several roots configured and no note open in any of them, it asks you to open one first rather than guessing which bundle you meant.
 
 Open the command palette and search for **LOKF**:
 
@@ -43,7 +49,6 @@ Open the command palette and search for **LOKF**:
 | Validate vault (full LOKF report) | Scan everything and open the report panel |
 | Validate active note | Check the current note |
 | Insert semantic header template into root index.md | Adds a starter header, only if the root `index.md` has no frontmatter at all |
-| Re-check for an installed OKF validator | Re-runs sibling-plugin detection |
 
 Clicking the status-bar item validates the active note, or runs a vault scan if none is open.
 
@@ -51,12 +56,12 @@ Clicking the status-bar item validates the active note, or runs a vault scan if 
 
 Configure under **Settings → LOKF Enforcer**. Every setting is registered declaratively, so it is reachable from Obsidian's settings search as well as the tab itself.
 
-- **Sibling plugin** - status + recheck button, and a toggle for the one-time "install an OKF validator" notice.
+- **Sibling plugin** - a shortcut that opens OKF Enforcer in Obsidian's community-plugin browser (you install and enable it yourself - this plugin never installs, enables, or calls into another plugin, and has no way to detect whether one is already installed), and a toggle for the one-time "install an OKF validator" notice shown on first opening a vault.
 - **Type vocabulary** - the known LOKF classes, whether an unrecognized `type` is worth a warning (never an error), and the accepted `genre` values.
 - **Type-specific fields** - toggle the recommended-field warnings for `Metric`/`Service`/`GlossaryTerm` concepts.
 - **Semantic header & base_iri** - the authority denylist (domains a `base_iri` must not live inside), the placeholder-domain list (treated as "pending", not a violation), and whether a missing header is worth a warning at all.
 - **Relationships** - whether to check that a relationship target inside this bundle resolves to a real file (both full IRIs under `base_iri` and bare relative paths are checked; external IRIs never are). A broken link is always a warning, never an error - LOKF is deliberately permissive about cross-links. Also an off-by-default check of `relations[].predicate` against a configurable list, since the full RelationType vocabulary lives in the LOKF schema.
-- **Scope & performance** - excluded folders and the batch size used for large vaults.
+- **Scope & performance** - the [bundle root folders](#usage) for a vault holding several independent bundles as project folders, excluded folders, and the batch size used for large vaults.
 
 ## For the curious: how the checking works
 
@@ -77,7 +82,7 @@ The sections above are everything you need to use the plugin. What follows is th
 
 ### What this plugin deliberately does *not* check
 
-Required `type`, `generated`/`verified` provenance and trust, `status`/`stale_after` lifecycle, `Attested Computation` shape, and `index.md`/`log.md` structure are all **OKF v0.2 rules**, not LOKF-specific ones - and a plugin like **OKF Enforcer** already checks them well. Duplicating that logic here would mean maintaining two copies of the same rules in two repos. Instead, LOKF Enforcer detects whether an OKF v0.2 validator is installed and enabled, and shows a one-time notice recommending one if not - but it never requires, loads, or calls into that other plugin's code, and it keeps working (just with narrower coverage) if you don't install one.
+Required `type`, `generated`/`verified` provenance and trust, `status`/`stale_after` lifecycle, `Attested Computation` shape, and `index.md`/`log.md` structure are all **OKF v0.2 rules**, not LOKF-specific ones - and a plugin like **OKF Enforcer** already checks them well. Duplicating that logic here would mean maintaining two copies of the same rules in two repos. Instead, LOKF Enforcer offers a shortcut (*Settings → Sibling plugin*) to Obsidian's community-plugin browser, and a one-time notice on first opening a vault, both recommending an OKF v0.2 validator - it never requires, loads, or calls into that other plugin's code, and it keeps working (just with narrower coverage) if you don't install one.
 
 ### Where this fits: the "Schema-valid" tier
 
@@ -101,7 +106,7 @@ See [CONTRIBUTING.md](CONTRIBUTING.md). Source lives in `src/` and the build is 
 
 ```text
 src/
-  main.ts           plugin lifecycle: commands, status bar, vault scan, sibling detection
+  main.ts           plugin lifecycle: commands, status bar, vault scan, bundle-root resolution
   validator.ts      the LOKF rule set - import-free, runs under plain Node
   report-view.ts    the side-panel conformance report
   settings.ts       declarative settings tab (Obsidian 1.13+)

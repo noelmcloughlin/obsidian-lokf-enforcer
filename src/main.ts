@@ -1,5 +1,5 @@
 // main.ts - LOKF Enforcer plugin entry point
-import { Notice, Plugin, TFile, type TAbstractFile, type WorkspaceLeaf, debounce, parseYaml } from "obsidian";
+import { Notice, Plugin, TFile, TFolder, type TAbstractFile, type WorkspaceLeaf, debounce, parseYaml } from "obsidian";
 import {
   type LokfSettings,
   type LokfIssue,
@@ -9,17 +9,52 @@ import {
   readBaseIri,
   splitFrontmatter,
   isExcluded,
+  hiddenRootSegment,
+  normalizeBundleRoots,
+  resolveBundleRoot,
+  bundleRootIndexPath,
+  toBundlePath,
+  toVaultPath,
 } from "./validator";
 import { LokfReportView, LOKF_VIEW_TYPE, type FileResult } from "./report-view";
 import { LokfSettingTab } from "./settings";
 
-const SIBLING_PLUGIN_ID = "okf-enforcer";
-const ROOT_INDEX = "index.md";
+// Sibling-plugin detection (below, `detectOkfValidator`) is disabled: it read
+// `app.plugins`, which is not public API and is a routine flag in community
+// plugin review. Left commented rather than deleted since re-enabling it is a
+// straightforward uncomment should a public "is plugin X installed" API
+// ever appear.
+// const SIBLING_PLUGIN_ID = "okf-enforcer";
 
 /** Not a LOKF rule - a file the vault refused to hand over. Reported rather
  *  than dropped, so an unreadable note can never read as a clean one. */
 function unreadableIssues(): LokfIssue[] {
   return [{ severity: "error", rule: "lokf/io-unreadable", message: "Could not be read - no LOKF rules ran." }];
+}
+
+/** Not a LOKF rule either - the configured bundle root is one Obsidian's file
+ *  index will never expose, so every note under it is unreachable. Without
+ *  this the scan would just report an empty, apparently healthy bundle. */
+function hiddenRootIssues(root: string, segment: string): LokfIssue[] {
+  return [
+    {
+      severity: "error",
+      rule: "lokf/io-hidden-root",
+      message: `Bundle root "${root}" sits inside "${segment}", and Obsidian's file index skips every folder whose name begins with a dot - no note under it is visible to this or any plugin, so nothing was scanned. Open that folder as its own vault instead (File → Open folder as vault), or move the bundle to a path with no dot-folder in it.`,
+    },
+  ];
+}
+
+/** The configured bundle root no longer exists - renamed, deleted, or mistyped
+ *  - which would otherwise scan zero notes and look like a clean bundle. */
+function missingBundleRootIssues(root: string): LokfIssue[] {
+  return [
+    {
+      severity: "error",
+      rule: "lokf/io-missing-root",
+      message: `Bundle root folder "${root}" does not exist in this vault, so nothing under it was scanned. Fix or remove it under Settings → LOKF Enforcer → Bundle root folders (clear the list to treat the whole vault as one bundle).`,
+    },
+  ];
 }
 
 interface ParsedNote {
@@ -31,17 +66,52 @@ export default class LokfPlugin extends Plugin {
   settings: LokfSettings = { ...DEFAULT_SETTINGS };
   statusEl!: HTMLElement;
   private siblingNoticeShown = false;
-  private siblingDetected = false;
   private busy = false;
   private hasVerdict = false;
   private pendingResults: { results: FileResult[]; scanned: number } | null = null;
   private activeResult: { path: string; issues: LokfIssue[] } | null = null;
-  /** base_iri is one value for the whole bundle; re-reading the root index for
-   *  every note opened made two vault reads out of each file-open. */
-  private baseIri: string | null = null;
-  private baseIriLoaded = false;
+  /** One base_iri per configured bundle root, keyed by that root's normalized
+   *  path ("" for the implicit whole-vault bundle). Re-reading a root index
+   *  for every note opened in its bundle made two vault reads out of each
+   *  file-open; absence of a key means "not loaded yet", not "no base_iri". */
+  private baseIriCache = new Map<string, string | null>();
+  private bundleRootsRaw: string[] | null = null;
+  private bundleRootsResolved: string[] = [];
 
   private exists = (path: string): boolean => !!this.app.vault.getAbstractFileByPath(path);
+
+  /** The configured bundle roots, normalized/deduped/sorted via
+   *  validator.ts's `normalizeBundleRoots` (pure, unit-tested under plain
+   *  Node in scripts/smoke-test.ts). Memoized on the raw array's *identity*,
+   *  which is sound because a settings list is always REPLACED, never
+   *  mutated in place (settings.ts assigns a fresh parseCsv() array on every
+   *  edit; validator.ts's `isKnownType` cache relies on the same invariant).
+   *  Not keyed on a joined string: folder names may contain the joiner, so
+   *  `["My Notes"]` and `["My", "Notes"]` would collide. */
+  private bundleRoots(): string[] {
+    const raw = this.settings.bundleRoots;
+    if (raw !== this.bundleRootsRaw) {
+      this.bundleRootsRaw = raw;
+      this.bundleRootsResolved = normalizeBundleRoots(raw);
+    }
+    return this.bundleRootsResolved;
+  }
+
+  private resolveRoot(vaultPath: string): string | null {
+    return resolveBundleRoot(vaultPath, this.bundleRoots());
+  }
+
+  private rootIndexPathFor(root: string): string {
+    return bundleRootIndexPath(root);
+  }
+
+  /** True for any path inside some configured bundle (or every path, when no
+   *  roots are configured and the bundle is the vault itself). Notes outside
+   *  every bundle are never scanned - matching an Obsidian-native vault where
+   *  each bundle is one project folder among several siblings. */
+  private isInBundle(vaultPath: string): boolean {
+    return this.resolveRoot(vaultPath) !== null;
+  }
 
   async onload(): Promise<void> {
     await this.loadSettings();
@@ -80,12 +150,6 @@ export default class LokfPlugin extends Plugin {
         void this.scaffoldRootHeader();
       },
     });
-    this.addCommand({
-      id: "check-sibling-plugin",
-      name: "Re-check for an installed OKF validator",
-      callback: () => this.checkSiblingPlugin(true),
-    });
-
     this.addSettingTab(new LokfSettingTab(this.app, this));
 
     // Debounced so that arrowing through a file list doesn't read and parse a
@@ -109,7 +173,7 @@ export default class LokfPlugin extends Plugin {
       })
     );
 
-    this.app.workspace.onLayoutReady(() => this.checkSiblingPlugin(false));
+    this.app.workspace.onLayoutReady(() => this.maybeShowSiblingNotice());
   }
 
   async loadSettings(): Promise<void> {
@@ -147,8 +211,27 @@ export default class LokfPlugin extends Plugin {
     }
   }
 
+  /** `path` is whatever a vault event named: a root index.md itself, or a
+   *  folder that contains one (a bundle root folder being renamed or deleted
+   *  fires for the folder path, not for each file inside it). Both drop the
+   *  cached base_iri for every root whose index sits at or under `path`.
+   *  Checks the current roots and whatever is already cached, so a root just
+   *  edited out of settings doesn't leave a stale entry behind either. */
   private invalidateBaseIri(path: string): void {
-    if (path === ROOT_INDEX) this.baseIriLoaded = false;
+    const roots = new Set(this.baseIriCache.keys());
+    for (const r of this.bundleRoots()) roots.add(r);
+    if (roots.size === 0) roots.add("");
+    for (const root of roots) {
+      const index = this.rootIndexPathFor(root);
+      if (index === path || index.startsWith(path + "/")) this.baseIriCache.delete(root);
+    }
+  }
+
+  /** Called from the settings tab when the set of bundle roots itself
+   *  changes, since a cached base_iri may now belong to a root that no
+   *  longer exists in that shape - simplest to drop the whole cache. */
+  invalidateBaseIriCache(): void {
+    this.baseIriCache.clear();
   }
 
   /** Null = the vault could not hand the file over. For the single-file paths,
@@ -163,35 +246,36 @@ export default class LokfPlugin extends Plugin {
     }
   }
 
-  private async findRootBaseIri(): Promise<string | null> {
-    if (this.baseIriLoaded) return this.baseIri;
-    const rootIndex = this.app.vault.getAbstractFileByPath(ROOT_INDEX);
+  private async findBaseIriFor(root: string): Promise<string | null> {
+    if (this.baseIriCache.has(root)) return this.baseIriCache.get(root) ?? null;
+    const rootIndex = this.app.vault.getAbstractFileByPath(this.rootIndexPathFor(root));
+    let baseIri: string | null = null;
     if (rootIndex instanceof TFile) {
       // An unreadable root index reads as "no base_iri" rather than taking the
       // scan down with it; the scan then reports it like any other bad file.
       const content = await this.readOrNull(rootIndex);
       const parsed = content === null ? null : this.parseNote(content);
-      this.baseIri = parsed ? readBaseIri(parsed.data) : null;
-    } else {
-      this.baseIri = null;
+      baseIri = parsed ? readBaseIri(parsed.data) : null;
     }
-    this.baseIriLoaded = true;
-    return this.baseIri;
+    this.baseIriCache.set(root, baseIri);
+    return baseIri;
   }
 
   private isConcept(file: TFile): boolean {
-    return file.extension === "md" && !isExcluded(file.path, this.settings);
+    return file.extension === "md" && !isExcluded(file.path, this.settings) && this.isInBundle(file.path);
   }
 
-  private isRoot(file: TFile): boolean {
-    return !file.path.includes("/");
+  private isRoot(file: TFile, root: string): boolean {
+    return !toBundlePath(file.path, root).includes("/");
   }
 
   private candidateFiles(): TFile[] {
     const configDir = this.app.vault.configDir;
     return this.app.vault
       .getMarkdownFiles()
-      .filter((f) => !f.path.startsWith(configDir + "/") && !isExcluded(f.path, this.settings));
+      .filter(
+        (f) => !f.path.startsWith(configDir + "/") && !isExcluded(f.path, this.settings) && this.isInBundle(f.path)
+      );
   }
 
   private getReportView(): LokfReportView | null {
@@ -199,10 +283,21 @@ export default class LokfPlugin extends Plugin {
     return leaf && leaf.view instanceof LokfReportView ? leaf.view : null;
   }
 
-  private issuesFor(path: string, content: string, isRoot: boolean, baseIri: string | null): LokfIssue[] {
+  /** `vaultPath` is translated to a path relative to `root` before reaching
+   *  validator.ts, which knows nothing about bundle roots - it always
+   *  validates as if the bundle it's given were the vault root. */
+  private issuesFor(
+    vaultPath: string,
+    content: string,
+    root: string,
+    isRoot: boolean,
+    baseIri: string | null
+  ): LokfIssue[] {
     const parsed = this.parseNote(content);
     if (!parsed) return [];
-    return validateLokfConcept(path, parsed.hasFm, parsed.data, isRoot, baseIri, this.settings, this.exists);
+    const bundlePath = toBundlePath(vaultPath, root);
+    const existsInBundle = (p: string): boolean => this.exists(toVaultPath(p, root));
+    return validateLokfConcept(bundlePath, parsed.hasFm, parsed.data, isRoot, baseIri, this.settings, existsInBundle);
   }
 
   /** Returns the items whose worker call threw, so a dropped file is reported
@@ -246,26 +341,44 @@ export default class LokfPlugin extends Plugin {
     }
     this.busy = true;
     try {
-      const baseIri = await this.findRootBaseIri();
       const files = this.candidateFiles();
+      // Pre-fetch each bundle's base_iri once, before the parallel batches
+      // below, so files sharing a root don't all miss an unwarmed cache at
+      // once and each trigger their own read of the same index.md.
+      const roots = [...new Set(files.map((f) => this.resolveRoot(f.path) ?? ""))];
+      await Promise.all(roots.map((r) => this.findBaseIriFor(r)));
+
       const results: FileResult[] = [];
       const unreadable = await this.processQueue(
         files,
         async (f) => {
+          const root = this.resolveRoot(f.path) ?? "";
+          const baseIri = await this.findBaseIriFor(root);
           const content = await this.app.vault.read(f);
-          const issues = this.issuesFor(f.path, content, this.isRoot(f), baseIri);
+          const issues = this.issuesFor(f.path, content, root, this.isRoot(f, root), baseIri);
           if (issues.length) results.push({ path: f.path, issues });
         },
         silent ? undefined : "LOKF: scanning"
       );
       for (const f of unreadable) results.push({ path: f.path, issues: unreadableIssues() });
 
-      // A bundle with no root index.md declares no header at all, so there is no
-      // file for that finding to land on - without this it would be the one
-      // vault shape that reports nothing.
-      if (!(this.app.vault.getAbstractFileByPath(ROOT_INDEX) instanceof TFile)) {
-        const issues = missingRootIndexIssues(this.settings);
-        if (issues.length) results.push({ path: ROOT_INDEX, issues });
+      // Findings no single note can carry, ordered by what actually went wrong:
+      // an unreachable bundle root already explains an empty scan, so adding
+      // "no index.md" on top of it would only blame the wrong thing. Runs once
+      // per configured root, or once for the implicit whole-vault root when
+      // none are configured.
+      const configuredRoots = this.bundleRoots().length ? this.bundleRoots() : [""];
+      for (const root of configuredRoots) {
+        const rootIndexPath = this.rootIndexPathFor(root);
+        const hiddenSegment = hiddenRootSegment(root);
+        if (hiddenSegment) {
+          results.push({ path: rootIndexPath, issues: hiddenRootIssues(root, hiddenSegment) });
+        } else if (root && !(this.app.vault.getAbstractFileByPath(root) instanceof TFolder)) {
+          results.push({ path: rootIndexPath, issues: missingBundleRootIssues(root) });
+        } else if (!(this.app.vault.getAbstractFileByPath(rootIndexPath) instanceof TFile)) {
+          const issues = missingRootIndexIssues(this.settings, rootIndexPath);
+          if (issues.length) results.push({ path: rootIndexPath, issues });
+        }
       }
 
       results.sort((a, b) => a.path.localeCompare(b.path));
@@ -316,14 +429,15 @@ export default class LokfPlugin extends Plugin {
       this.setActiveResult(null);
       return;
     }
-    const baseIri = await this.findRootBaseIri();
+    const root = this.resolveRoot(file.path) ?? "";
+    const baseIri = await this.findBaseIriFor(root);
     const content = await this.readOrNull(file);
     if (content === null) {
       this.setActiveResult({ path: file.path, issues: unreadableIssues() });
       if (notify) new Notice("LOKF: could not read this note.");
       return;
     }
-    const issues = this.issuesFor(file.path, content, this.isRoot(file), baseIri);
+    const issues = this.issuesFor(file.path, content, root, this.isRoot(file, root), baseIri);
     this.setActiveResult({ path: file.path, issues });
     if (notify) {
       const errs = issues.filter((i) => i.severity === "error").length;
@@ -333,10 +447,9 @@ export default class LokfPlugin extends Plugin {
   }
 
   private refreshStatus(): void {
-    const sibling = `Sibling: OKF validator ${this.siblingDetected ? "detected" : "not detected"}`;
     if (!this.hasVerdict) {
       this.statusEl.setText("LOKF: —");
-      this.statusEl.setAttribute("aria-label", `LOKF - click to validate\n${sibling}`);
+      this.statusEl.setAttribute("aria-label", "LOKF - click to validate");
       return;
     }
     const issues = this.activeResult?.issues ?? [];
@@ -344,7 +457,6 @@ export default class LokfPlugin extends Plugin {
     const warns = issues.length - errs;
     this.statusEl.setText(errs > 0 ? `LOKF ✖ ${errs}` : warns > 0 ? `LOKF ⚠ ${warns}` : "LOKF ✓");
     const lines = issues.slice(0, 8).map((i) => `${i.severity}: ${i.message}`);
-    lines.push(sibling);
     this.statusEl.setAttribute("aria-label", lines.join("\n"));
   }
 
@@ -374,68 +486,86 @@ export default class LokfPlugin extends Plugin {
     }
   }
 
-  private detectOkfValidator(): boolean {
-    const plugins = (
-      this.app as unknown as {
-        plugins?: { enabledPlugins?: Set<string>; plugins?: Record<string, unknown> };
-      }
-    ).plugins;
-    try {
-      return !!plugins?.enabledPlugins?.has(SIBLING_PLUGIN_ID) || !!plugins?.plugins?.[SIBLING_PLUGIN_ID];
-    } catch {
-      return false;
-    }
+  // private detectOkfValidator(): boolean {
+  //   const plugins = (
+  //     this.app as unknown as {
+  //       plugins?: { enabledPlugins?: Set<string>; plugins?: Record<string, unknown> };
+  //     }
+  //   ).plugins;
+  //   try {
+  //     return !!plugins?.enabledPlugins?.has(SIBLING_PLUGIN_ID) || !!plugins?.plugins?.[SIBLING_PLUGIN_ID];
+  //   } catch {
+  //     return false;
+  //   }
+  // }
+
+  /** Shown once, if enabled - there is no reliable, public way to tell whether
+   *  an OKF validator is already installed (see the commented-out
+   *  `detectOkfValidator` above), so this fires unconditionally rather than
+   *  only when "not detected". */
+  private maybeShowSiblingNotice(): void {
+    if (!this.settings.recommendSiblingPlugin || this.siblingNoticeShown) return;
+    new Notice(
+      "LOKF Enforcer only checks the LOKF semantic layer. Install an OKF v0.2 validator (e.g. OKF Enforcer) alongside it for full coverage.",
+      10000
+    );
+    this.siblingNoticeShown = true;
+    void this.saveSettings();
   }
 
-  siblingStatusText(): string {
-    return this.siblingDetected ? "Detected" : "Not detected";
-  }
-
-  checkSiblingPlugin(manual: boolean): void {
-    this.siblingDetected = this.detectOkfValidator();
-    this.refreshStatus();
-    if (manual) {
-      new Notice(
-        this.siblingDetected
-          ? "LOKF: OKF validator detected."
-          : "LOKF: no OKF validator detected - install one (e.g. OKF Enforcer) for full OKF v0.2 coverage."
-      );
-      return;
+  /** Which bundle the scaffold command should target: the active note's own
+   *  bundle if it has one, else the sole configured root, else the implicit
+   *  whole-vault root when none are configured. Null only when several roots
+   *  are configured and no open note picks one out - there is no default to
+   *  fall back to that wouldn't silently scaffold the wrong bundle. */
+  private resolveScaffoldTarget(): string | null {
+    const active = this.app.workspace.getActiveFile();
+    if (active) {
+      const r = this.resolveRoot(active.path);
+      if (r !== null) return r;
     }
-    if (!this.siblingDetected && this.settings.recommendSiblingPlugin && !this.siblingNoticeShown) {
-      new Notice(
-        "LOKF Enforcer only checks the LOKF semantic layer. Install an OKF v0.2 validator (e.g. OKF Enforcer) alongside it for full coverage.",
-        10000
-      );
-      this.siblingNoticeShown = true;
-      void this.saveSettings();
-    }
+    const roots = this.bundleRoots();
+    if (roots.length === 0) return "";
+    if (roots.length === 1) return roots[0] ?? "";
+    return null;
   }
 
   private async scaffoldRootHeader(): Promise<void> {
-    const rootIndex = this.app.vault.getAbstractFileByPath(ROOT_INDEX);
+    const root = this.resolveScaffoldTarget();
+    if (root === null) {
+      new Notice(
+        "LOKF: several bundle roots are configured - open a note inside the bundle you want to scaffold first."
+      );
+      return;
+    }
+    const rootIndexPath = this.rootIndexPathFor(root);
+    const rootIndex = this.app.vault.getAbstractFileByPath(rootIndexPath);
     let content = "";
     if (rootIndex instanceof TFile) {
       // Treating an unreadable index.md as empty would prepend the template to
       // "" and write that back, destroying whatever the file actually held.
       const read = await this.readOrNull(rootIndex);
       if (read === null) {
-        new Notice("LOKF: could not read index.md - leaving it untouched.");
+        new Notice(`LOKF: could not read ${rootIndexPath} - leaving it untouched.`);
         return;
       }
       content = read;
     }
     const { hasFm } = splitFrontmatter(content);
     if (hasFm) {
-      new Notice("LOKF: root index.md already has frontmatter - add the LOKF header fields manually to avoid clobbering it.");
+      new Notice(`LOKF: ${rootIndexPath} already has frontmatter - add the LOKF header fields manually to avoid clobbering it.`);
       return;
     }
+    // A bundle confined to a subfolder of a larger vault is named for that
+    // folder, not the whole vault - the vault name would describe every other
+    // sibling folder just as well as this one.
+    const bundleName = root ? (root.split("/").pop() ?? root) : this.app.vault.getName();
     const template = `---
 lokf_version: "0.2"
 okf_version: "0.2"
 base_iri: https://your-domain.example/knowledge/
 context: https://w3id.org/lokf/context.jsonld
-title: ${this.app.vault.getName()} Knowledge Bundle
+title: ${bundleName} Knowledge Bundle
 description: TODO
 license: https://creativecommons.org/licenses/by/4.0/
 publisher:
@@ -447,15 +577,21 @@ publisher:
 `;
     const newContent = template + content;
     try {
-      if (rootIndex instanceof TFile) await this.app.vault.modify(rootIndex, newContent);
-      else await this.app.vault.create(ROOT_INDEX, newContent);
+      if (rootIndex instanceof TFile) {
+        await this.app.vault.modify(rootIndex, newContent);
+      } else {
+        // A bundle root configured as a subfolder may not exist yet - create()
+        // fails outright if its parent folder is missing.
+        if (root && !this.app.vault.getAbstractFileByPath(root)) await this.app.vault.createFolder(root);
+        await this.app.vault.create(rootIndexPath, newContent);
+      }
     } catch {
       // The command is fired with `void`, so without this a failed write would
       // report nothing to the user and surface only as an unhandled rejection.
-      new Notice("LOKF: could not write index.md - the semantic header was not inserted.");
+      new Notice(`LOKF: could not write ${rootIndexPath} - the semantic header was not inserted.`);
       return;
     }
-    this.invalidateBaseIri(ROOT_INDEX);
-    new Notice("LOKF: inserted a semantic header template into index.md - replace the placeholder base_iri before publishing.");
+    this.invalidateBaseIri(rootIndexPath);
+    new Notice(`LOKF: inserted a semantic header template into ${rootIndexPath} - replace the placeholder base_iri before publishing.`);
   }
 }
