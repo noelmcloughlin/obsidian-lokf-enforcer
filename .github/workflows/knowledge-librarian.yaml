@@ -3,46 +3,53 @@ name: Knowledge Librarian
 # Scheduled LLM "librarian" that keeps the .lokf/ bundle in step with the repo (the
 # Karpathy rule): run the agent, validate, and open a review PR with whatever
 # changed. It NEVER pushes to the default branch and NEVER auto-merges; no changes
-# -> no PR; and it is inert until AGENT_CLI is set.
+# -> no PR; and it is inert until KNOWLEDGE_LIBRARIAN_ENABLED is set to "true".
+#
+# Two jobs by design (least privilege): the `refresh` job runs the agent - third-
+# party code - under a read-only token with no git credentials on disk, then hands
+# the proposed bundle change to `publish` as a patch artifact. Only `publish`,
+# which runs no agent code, holds the contents-write / pull-requests-write token
+# used to push the branch and open the PR, so a compromised agent cannot reach it.
 on:
   schedule:
     - cron: "0 5 * * 1" # Mondays at 05:00 UTC
-  # Before wiring AGENT_CLI (below), run this once by hand from the Actions
-  # tab to exercise the install step on its own - it runs on every trigger,
-  # so this checks the skill installs from the pinned tag before the agent
-  # step (a no-op until AGENT_CLI is set) is ever asked to do anything.
+  # Before arming KNOWLEDGE_LIBRARIAN_ENABLED (below), run this once by hand from
+  # the Actions tab to exercise the install step on its own - it runs on every
+  # trigger, so this checks the skill installs from the pinned tag before the
+  # agent step (skipped until the variable is set) is ever asked to do anything.
   workflow_dispatch:
 
-# Least-privilege default, as in build.yml and release.yml: the job below opts
-# into exactly the two write scopes it needs; nothing else inherits them.
-permissions: {}
+permissions: {} # deny by default; each job requests only the scopes it needs
 
 concurrency:
   group: knowledge-librarian
   cancel-in-progress: false
 
 jobs:
-  librarian:
-    name: Refresh the LOKF bundle
+  refresh:
+    name: Refresh the LOKF bundle (agent, read-only)
     runs-on: ubuntu-latest
     permissions:
-      contents: write # create/push the librarian branch
-      pull-requests: write # open the review PR
+      contents: read # read the repo only - no write token near the agent
+    outputs:
+      changed: ${{ steps.diff.outputs.changed }}
+      validate_outcome: ${{ steps.validate-lokf.outcome }}
+      drafts: ${{ steps.curator.outputs.drafts }}
+      questions: ${{ steps.curator.outputs.questions }}
+      human: ${{ steps.curator.outputs.human }}
     steps:
       # Same audit-mode egress monitor build.yml and release.yml run; this job
-      # installs packages, clones a skill, and pushes a branch.
+      # installs packages, clones a skill, and runs a third-party agent.
       - name: Harden the runner
         uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
         with:
           egress-policy: audit
 
-      # Unlike build.yml/release.yml this keeps persist-credentials at its
-      # default: "Commit and push the librarian branch" below needs the token to
-      # push. The job-level permissions above are the only write scopes it has.
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
+          persist-credentials: false # keep GITHUB_TOKEN off disk while the agent runs
 
       - name: Set up uv
         uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
@@ -74,34 +81,37 @@ jobs:
           test -f .agents/skills/lokf-librarian/SKILL.md
           echo "Installed lokf-librarian@$LOKF_SKILLS_REF"
 
-      # Wire this up: point the AGENT_CLI repo variable at your non-interactive agent
-      # command. Unset = safe no-op. The workflow always runs the pinned, reviewed
-      # wrapper script below - never a variable's content as a command - so setting
-      # AGENT_CLI can only choose *which agent* runs, not *what command* runs.
+      # Wire this up under Settings -> Secrets and variables -> Actions:
+      #   1. Set KNOWLEDGE_LIBRARIAN_ENABLED to "true" to arm the run. Anything
+      #      else (or unset) leaves this step skipped - a safe no-op.
+      #   2. Set AGENT_CLI to your non-interactive agent command (it takes a prompt
+      #      via -p). If it embeds an API key or token, define it as a *secret*
+      #      (secrets are masked in logs; `vars.` are not, and public-repo logs are
+      #      world-readable) and reference `secrets.AGENT_CLI` here instead. Better
+      #      still, keep the credential out of the command and let the agent CLI read
+      #      it from its own secret-provided environment variable.
       #
-      # Credentials: `vars.` values are NOT masked in workflow logs, and on a public
-      # repository those logs are world-readable; `secrets.` values are masked. So if
-      # AGENT_CLI embeds an API key or token, define it under Settings -> Secrets and
-      # variables -> Actions as a *secret* and reference `secrets.AGENT_CLI` here
-      # instead. Better still, keep the credential out of the command entirely and
-      # let the agent CLI read it from its own secret-provided environment variable.
+      # What runs is fixed to the reviewed, in-repo wrapper below - not an arbitrary
+      # command string from a repo variable - so changing *what executes* goes
+      # through code review, not an unreviewed Settings edit.
+      #
+      # Security rationale (human + automated reviewers): AGENT_CLI is trusted,
+      # admin-set config (not untrusted input). The wrapper parses it into a quoted
+      # argv array and runs it directly - no eval, no re-expansion - and only here,
+      # in this read-only job (contents: read, no persisted credentials); a post-run
+      # check fails if the agent writes outside .lokf/knowledge/. Contained by
+      # design, not arbitrary execution.
       - name: Run the librarian agent
+        if: vars.KNOWLEDGE_LIBRARIAN_ENABLED == 'true'
         env:
           AGENT_CLI: ${{ vars.AGENT_CLI }}
-        run: |
-          set -euo pipefail
-          if [ -z "${AGENT_CLI:-}" ]; then
-            echo "::notice::AGENT_CLI is not set - skipping the agent step."
-            exit 0
-          fi
-          bash .lokf/scripts/knowledge-librarian.sh
+        run: bash .lokf/scripts/knowledge-librarian.sh
 
-      # The wrapper's own CONTRACT says the agent only reads the repo and writes
-      # under .lokf/knowledge/, and never runs git itself - advisory only, since
-      # nothing stops a misconfigured or compromised AGENT_CLI from ignoring it.
-      # Enforce it here: fail the job (no branch pushed, no PR opened) if anything
-      # outside the allowed paths changed. .lokf/uv.lock is excluded too - the
-      # earlier "Install the lokf sidecar" step's `uv sync` can touch it, same
+      # The wrapper enforces the same boundary itself, immediately after the agent
+      # returns. This is the second layer: it runs even when the wrapper didn't
+      # (agent disarmed, or an early exit), so no path outside the bundle can reach
+      # `publish` in the patch. .lokf/uv.lock is excluded too - the earlier
+      # "Install the lokf sidecar" step's `uv sync` can touch it, the same
       # tool-artifact exception "Detect changes" below already makes.
       - name: Enforce the agent's write scope
         run: |
@@ -152,33 +162,79 @@ jobs:
             echo "human=$(count '^ *-? *by: *human:')"
           } >> "$GITHUB_OUTPUT"
 
-      - name: Commit and push the librarian branch
-        id: push
+      # Hand the proposed change to the privileged job as a patch (captures adds,
+      # edits and deletes under the bundle, plus lokf-docent's feedback.md). The
+      # agent never sees a write token; `publish` applies this on a clean checkout.
+      - name: Package the bundle change
         if: steps.diff.outputs.changed == 'true'
         run: |
           set -euo pipefail
+          git add -A -- .lokf/knowledge
+          # Reader feedback (written by lokf-docent, consumed by the librarian,
+          # which removes handled entries) - carry it so entries don't come back.
+          [ -e .lokf/feedback.md ] && git add -A -- .lokf/feedback.md || true
+          git diff --cached --binary > "$RUNNER_TEMP/librarian.patch"
+
+      - name: Upload the bundle patch
+        if: steps.diff.outputs.changed == 'true'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: librarian-bundle-patch
+          path: ${{ runner.temp }}/librarian.patch
+          retention-days: 1
+          if-no-files-found: error
+
+  publish:
+    name: Open the review PR (privileged, no agent)
+    needs: refresh
+    if: needs.refresh.outputs.changed == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # create/push the librarian branch
+      pull-requests: write # open the review PR
+    steps:
+      - name: Harden the runner
+        uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
+        with:
+          egress-policy: audit
+
+      # Unlike the `refresh` job this keeps persist-credentials at its default:
+      # "Commit and push the librarian branch" below needs the token to push. No
+      # agent code runs in this job, so the write-scoped token is never exposed
+      # to one.
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Download the bundle patch
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: librarian-bundle-patch
+          path: ${{ runner.temp }}
+
+      - name: Commit and push the librarian branch
+        id: push
+        run: |
+          set -euo pipefail
+          # Apply the agent's proposed change onto a clean checkout; fails safe if
+          # the default branch moved since `refresh` ran.
+          git apply --index --whitespace=nowarn "$RUNNER_TEMP/librarian.patch"
           branch="knowledge-librarian/$(date -u +%Y-%m-%d)-${GITHUB_RUN_ID}"
           git config user.name  "knowledge-librarian[bot]"
           git config user.email "knowledge-librarian[bot]@users.noreply.github.com"
           git checkout -b "$branch"
-          git add -- .lokf/knowledge
-          # Reader feedback (written by lokf-docent, consumed by the librarian,
-          # which removes handled entries) - commit it so they don't come back.
-          [ -e .lokf/feedback.md ] && git add -- .lokf/feedback.md
           git commit -m "chore(lokf): scheduled librarian refresh of the knowledge bundle" \
                      -m "Automated Karpathy-rule pass. Review required - do not auto-merge."
           git push --set-upstream origin "$branch"
           echo "branch=$branch" >> "$GITHUB_OUTPUT"
 
       - name: Open the review PR
-        if: steps.diff.outputs.changed == 'true'
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
         env:
           BRANCH: ${{ steps.push.outputs.branch }}
-          LOKF_OUTCOME: ${{ steps.validate-lokf.outcome }}
-          DRAFTS: ${{ steps.curator.outputs.drafts }}
-          QUESTIONS: ${{ steps.curator.outputs.questions }}
-          HUMAN: ${{ steps.curator.outputs.human }}
+          LOKF_OUTCOME: ${{ needs.refresh.outputs.validate_outcome }}
+          DRAFTS: ${{ needs.refresh.outputs.drafts }}
+          QUESTIONS: ${{ needs.refresh.outputs.questions }}
+          HUMAN: ${{ needs.refresh.outputs.human }}
         with:
           script: |
             const { BRANCH, LOKF_OUTCOME, DRAFTS, QUESTIONS, HUMAN } = process.env;
