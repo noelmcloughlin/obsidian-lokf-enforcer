@@ -3,15 +3,15 @@ name: Knowledge Librarian
 # Scheduled LLM "librarian" that keeps the .lokf/ bundle in step with the repo (the
 # Karpathy rule): run the agent, validate, and open a review PR with whatever
 # changed. It NEVER pushes to the default branch and NEVER auto-merges; no changes
-# -> no PR; and it is inert until KNOWLEDGE_LIBRARIAN_CMD is set.
+# -> no PR; and it is inert until AGENT_CLI is set.
 on:
   schedule:
     - cron: "0 5 * * 1" # Mondays at 05:00 UTC
   workflow_dispatch:
 
-permissions:
-  contents: write # create/push the librarian branch
-  pull-requests: write # open the review PR
+# Least-privilege default, as in build.yml and release.yml: the job below opts
+# into exactly the two write scopes it needs; nothing else inherits them.
+permissions: {}
 
 concurrency:
   group: knowledge-librarian
@@ -21,14 +21,27 @@ jobs:
   librarian:
     name: Refresh the LOKF bundle
     runs-on: ubuntu-latest
+    permissions:
+      contents: write # create/push the librarian branch
+      pull-requests: write # open the review PR
     steps:
+      # Same audit-mode egress monitor build.yml and release.yml run; this job
+      # installs packages, clones a skill, and pushes a branch.
+      - name: Harden the runner
+        uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
+        with:
+          egress-policy: audit
+
+      # Unlike build.yml/release.yml this keeps persist-credentials at its
+      # default: "Commit and push the librarian branch" below needs the token to
+      # push. The job-level permissions above are the only write scopes it has.
       - name: Checkout
-        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
 
       - name: Set up uv
-        uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86 # v5
+        uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
         with:
           python-version: "3.12"
 
@@ -38,21 +51,63 @@ jobs:
         run: uv sync
         working-directory: .lokf
 
-      # Wire this up: point the KNOWLEDGE_LIBRARIAN_CMD repo variable at your agent
-      # command (e.g. `bash .lokf/scripts/knowledge-librarian.sh`). Unset = safe no-op.
-      # The scaffolded wrapper also reads AGENT_CLI; pass it through here (switch to
-      # `secrets.AGENT_CLI` if the command embeds a token).
+      # The librarian skill is runtime state, not source (its own hygiene note),
+      # so it is never committed here: install it, pinned to one release, on
+      # every run. A plain clone of the tagged repo needs no `gh` flags and no
+      # token (the repo is public). .agents/ is git-ignored, so the install is
+      # invisible both to the write-scope check below and to "Detect changes".
+      - name: Install the pinned lokf-librarian skill
+        env:
+          LOKF_SKILLS_REPO: https://github.com/noelmcloughlin/lokf-agent-skills
+          LOKF_SKILLS_REF: v0.9.0 # bump together with the README/CONTRIBUTING pins
+        run: |
+          set -euo pipefail
+          tmp="$(mktemp -d)"
+          git -c advice.detachedHead=false clone --quiet --depth 1 --branch "$LOKF_SKILLS_REF" "$LOKF_SKILLS_REPO" "$tmp"
+          mkdir -p .agents/skills
+          rm -rf .agents/skills/lokf-librarian
+          cp -R "$tmp/skills/lokf-librarian" .agents/skills/
+          test -f .agents/skills/lokf-librarian/SKILL.md
+          echo "Installed lokf-librarian@$LOKF_SKILLS_REF"
+
+      # Wire this up: point the AGENT_CLI repo variable at your non-interactive agent
+      # command. Unset = safe no-op. The workflow always runs the pinned, reviewed
+      # wrapper script below - never a variable's content as a command - so setting
+      # AGENT_CLI can only choose *which agent* runs, not *what command* runs.
+      #
+      # Credentials: `vars.` values are NOT masked in workflow logs, and on a public
+      # repository those logs are world-readable; `secrets.` values are masked. So if
+      # AGENT_CLI embeds an API key or token, define it under Settings -> Secrets and
+      # variables -> Actions as a *secret* and reference `secrets.AGENT_CLI` here
+      # instead. Better still, keep the credential out of the command entirely and
+      # let the agent CLI read it from its own secret-provided environment variable.
       - name: Run the librarian agent
         env:
-          KNOWLEDGE_LIBRARIAN_CMD: ${{ vars.KNOWLEDGE_LIBRARIAN_CMD }}
           AGENT_CLI: ${{ vars.AGENT_CLI }}
         run: |
           set -euo pipefail
-          if [ -z "${KNOWLEDGE_LIBRARIAN_CMD:-}" ]; then
-            echo "::notice::KNOWLEDGE_LIBRARIAN_CMD is not set - skipping the agent step."
+          if [ -z "${AGENT_CLI:-}" ]; then
+            echo "::notice::AGENT_CLI is not set - skipping the agent step."
             exit 0
           fi
-          bash -c "${KNOWLEDGE_LIBRARIAN_CMD}"
+          bash .lokf/scripts/knowledge-librarian.sh
+
+      # The wrapper's own CONTRACT says the agent only reads the repo and writes
+      # under .lokf/knowledge/, and never runs git itself - advisory only, since
+      # nothing stops a misconfigured or compromised AGENT_CLI from ignoring it.
+      # Enforce it here: fail the job (no branch pushed, no PR opened) if anything
+      # outside the allowed paths changed. .lokf/uv.lock is excluded too - the
+      # earlier "Install the lokf sidecar" step's `uv sync` can touch it, same
+      # tool-artifact exception "Detect changes" below already makes.
+      - name: Enforce the agent's write scope
+        run: |
+          set -euo pipefail
+          out="$(git status --porcelain -- . ':!.lokf/knowledge' ':!.lokf/feedback.md' ':!.lokf/uv.lock')"
+          if [ -n "$out" ]; then
+            echo "::error::The librarian agent touched files outside .lokf/knowledge/ and .lokf/feedback.md:"
+            echo "$out"
+            exit 1
+          fi
 
       - name: Validate the LOKF bundle
         id: validate-lokf
@@ -73,6 +128,26 @@ jobs:
             echo "changed=false" >> "$GITHUB_OUTPUT"
           fi
 
+      # Plain-language counts for the PR's "For the curator" section. Computed
+      # from frontmatter with grep - deterministic, no dependence on what the
+      # agent printed. The lokf-curator skill's own report is the authoritative
+      # version; this is the nudge that gets a busy person to run it.
+      - name: Summarise for the curator
+        id: curator
+        if: steps.diff.outputs.changed == 'true'
+        run: |
+          set -euo pipefail
+          count() {
+            grep -rlE "$1" --include='*.md' .lokf/knowledge 2>/dev/null \
+              | grep -vE '/(index|log)\.md$' \
+              | grep -c . || true
+          }
+          {
+            echo "drafts=$(count '^status: *draft')"
+            echo "questions=$(count '^## Open questions')"
+            echo "human=$(count '^ *-? *by: *human:')"
+          } >> "$GITHUB_OUTPUT"
+
       - name: Commit and push the librarian branch
         id: push
         if: steps.diff.outputs.changed == 'true'
@@ -83,6 +158,9 @@ jobs:
           git config user.email "knowledge-librarian[bot]@users.noreply.github.com"
           git checkout -b "$branch"
           git add -- .lokf/knowledge
+          # Reader feedback (written by lokf-docent, consumed by the librarian,
+          # which removes handled entries) - commit it so they don't come back.
+          [ -e .lokf/feedback.md ] && git add -- .lokf/feedback.md
           git commit -m "chore(lokf): scheduled librarian refresh of the knowledge bundle" \
                      -m "Automated Karpathy-rule pass. Review required - do not auto-merge."
           git push --set-upstream origin "$branch"
@@ -90,13 +168,16 @@ jobs:
 
       - name: Open the review PR
         if: steps.diff.outputs.changed == 'true'
-        uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
         env:
           BRANCH: ${{ steps.push.outputs.branch }}
           LOKF_OUTCOME: ${{ steps.validate-lokf.outcome }}
+          DRAFTS: ${{ steps.curator.outputs.drafts }}
+          QUESTIONS: ${{ steps.curator.outputs.questions }}
+          HUMAN: ${{ steps.curator.outputs.human }}
         with:
           script: |
-            const { BRANCH, LOKF_OUTCOME } = process.env;
+            const { BRANCH, LOKF_OUTCOME, DRAFTS, QUESTIONS, HUMAN } = process.env;
             // On `schedule` triggers the event payload is empty, so resolve the
             // default branch via the API rather than context.payload.repository.
             const { data: repo } = await github.rest.repos.get(context.repo);
@@ -118,6 +199,13 @@ jobs:
               '- [ ] Claims trace to a source of truth.',
               '- [ ] `type`/frontmatter and typed relations are correct.',
               '- [ ] Validation findings above are acceptable or addressed.',
+              '',
+              '### For the curator',
+              `Across the whole bundle: ${DRAFTS} concept(s) are drafts (not yet confirmed by a person),`,
+              `${QUESTIONS} carry open questions the librarian could not settle, and ${HUMAN} have been`,
+              'confirmed by a person. The librarian derives facts; it never vouches for them. A few',
+              'minutes with the **lokf-curator** skill turns drafts into confirmed knowledge - run its',
+              'report for the full picture and a guided review.',
             ].join('\n');
             const { data: pr } = await github.rest.pulls.create({
               owner: context.repo.owner,

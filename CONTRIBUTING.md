@@ -4,7 +4,7 @@ Thanks for your interest in improving LOKF Enforcer!
 
 ## Development setup
 
-Node 18+ is required.
+Node 20+ is required (CI builds on 20, 22, and 24).
 
 ```bash
 git clone https://github.com/noelmcloughlin/obsidian-lokf-enforcer.git
@@ -20,6 +20,23 @@ To test in a real vault, clone into `<your-vault>/.obsidian/plugins/lokf-enforce
 directly, or symlink/copy `main.js`, `manifest.json`, and `styles.css` there, then
 reload Obsidian. The [Hot Reload](https://github.com/pjeby/hot-reload) plugin speeds
 up iteration.
+
+### Agent skills (optional)
+
+The `.lokf/` knowledge bundle is maintained with the four
+[lokf-agent-skills](https://github.com/noelmcloughlin/lokf-agent-skills). They are
+installed, never committed - `.agents/`, `.claude/`, and `skills-lock.json` are
+git-ignored - and CI installs the librarian skill itself at run time. To work on
+the bundle locally, install all four once, pinned to the same release (GitHub CLI
+2.90+):
+
+```bash
+for s in lokf-scaffolding lokf-librarian lokf-curator lokf-docent; do
+  gh skill install noelmcloughlin/lokf-agent-skills "$s@v0.9.0"
+done
+```
+
+Nothing in the plugin itself depends on them.
 
 ## Layout
 
