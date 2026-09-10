@@ -41,12 +41,17 @@ jobs:
             # no partial match. Catch a mistagged push (e.g. `v0.2.0` instead of
             # `0.2.0`) here, before spending a build + attestation on a release
             # Obsidian's installer would never find.
+            # The tag reaches the shell through the environment, never through
+            # ${{ }} interpolation: a tag name is free-form text, and git permits
+            # `$`, backticks and quotes in one, so interpolating it directly into
+            # a run: block would let a pushed tag execute here.
             - name: Verify tag matches manifest version
+              env:
+                  TAG: ${{ github.ref_name }}
               run: |
-                  tag="${{ github.ref_name }}"
                   version="$(node -p "require('./manifest.json').version")"
-                  if [ "$tag" != "$version" ]; then
-                    echo "::error::Tag '$tag' does not match manifest.json version '$version'. Obsidian requires the release tag to equal the version exactly, with no leading 'v'. Delete this tag, then re-tag as '$version' (see CONTRIBUTING.md's release flow)."
+                  if [ "$TAG" != "$version" ]; then
+                    echo "::error::Tag '$TAG' does not match manifest.json version '$version'. Obsidian requires the release tag to equal the version exactly, with no leading 'v'. Delete this tag, then re-tag as '$version' (see CONTRIBUTING.md's release flow)."
                     exit 1
                   fi
 
@@ -76,10 +81,9 @@ jobs:
             - name: Create release
               env:
                   GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+                  TAG: ${{ github.ref_name }}
               run: |
-                    tag="${{ github.ref_name }}"
-
-                    gh release create "$tag" \
-                        --title="$tag" \
+                    gh release create "$TAG" \
+                        --title="$TAG" \
                         --draft \
                         main.js manifest.json ${{ steps.styles.outputs.exists == 'true' && 'styles.css' || '' }}

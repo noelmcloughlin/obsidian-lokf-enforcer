@@ -7,6 +7,10 @@ name: Knowledge Librarian
 on:
   schedule:
     - cron: "0 5 * * 1" # Mondays at 05:00 UTC
+  # Before wiring AGENT_CLI (below), run this once by hand from the Actions
+  # tab to exercise the install step on its own - it runs on every trigger,
+  # so this checks the skill installs from the pinned tag before the agent
+  # step (a no-op until AGENT_CLI is set) is ever asked to do anything.
   workflow_dispatch:
 
 # Least-privilege default, as in build.yml and release.yml: the job below opts
