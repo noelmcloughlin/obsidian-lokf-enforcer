@@ -6,6 +6,9 @@
  * thing this harness adds is a YAML parser (a devDependency; the plugin itself
  * uses Obsidian's own parseYaml).
  */
+import { readFileSync, readdirSync, statSync, existsSync } from "node:fs";
+import { join, relative, sep } from "node:path";
+import { fileURLToPath } from "node:url";
 import { load as loadYaml } from "js-yaml";
 import {
   validateLokfConcept,
@@ -21,13 +24,14 @@ import {
 
 let failures = 0;
 
-function expect(name: string, condition: boolean, detail: string): void {
+function expect(name: string, condition: boolean, detail: string): boolean {
   if (condition) {
     console.log(`  ok - ${name}`);
   } else {
     failures++;
     console.error(`  FAIL - ${name}\n         ${detail}`);
   }
+  return condition;
 }
 
 function section(name: string, fn: () => void): void {
@@ -317,6 +321,97 @@ section("reserved files", () => {
   expect("non-root index.md yields nothing", check("services/index.md", "# Services\n").length === 0, "expected none");
   expect("log.md yields nothing", check("log.md", "# Change Log\n", { isRoot: true }).length === 0, "expected none");
 });
+
+// ---- Golden fixtures: real bundle directories, walked whole ----
+// Diagnostic as much as confirmatory: a hand-maintained bundle drawing an
+// *error* means the rule engine is too strict, so errors are asserted to be
+// zero. Warnings are only counted and printed - a perfectly good bundle still
+// draws them (a placeholder base_iri, a missing recommended field, a relation
+// to a concept outside the walked set).
+
+const repoRoot = join(fileURLToPath(new URL(".", import.meta.url)), "..");
+
+function walkMarkdown(dir: string): string[] {
+  const out: string[] = [];
+  // Sorted so the walk order - and any failure output - is reproducible
+  // rather than dependent on filesystem order.
+  for (const entry of readdirSync(dir).sort()) {
+    if (entry.startsWith(".")) continue;
+    const abs = join(dir, entry);
+    if (statSync(abs).isDirectory()) out.push(...walkMarkdown(abs));
+    else if (entry.endsWith(".md")) out.push(abs);
+  }
+  return out;
+}
+
+/** A `required` bundle must exist and hold at least one concept: a fixture
+ *  whose directory got moved would otherwise "pass" by checking nothing. */
+function validateBundle(
+  name: string,
+  knowledgeDir: string,
+  opts: { required: boolean; transform?: (content: string) => string }
+): void {
+  const transform = opts.transform ?? ((c: string) => c);
+  section(`golden fixture: ${name}`, () => {
+    if (!existsSync(knowledgeDir)) {
+      if (opts.required) expect("bundle directory is present", false, `nothing at ${knowledgeDir}`);
+      else console.log(`  skip - nothing at ${knowledgeDir}`);
+      return;
+    }
+
+    const concepts = walkMarkdown(knowledgeDir).map((abs) => ({
+      path: relative(knowledgeDir, abs).split(sep).join("/"),
+      content: transform(readFileSync(abs, "utf8")),
+    }));
+    if (!expect(`bundle holds concepts (${concepts.length} file(s))`, concepts.length > 0, `no .md under ${knowledgeDir}`)) {
+      return;
+    }
+
+    const present = new Set(concepts.map((c) => c.path));
+    const rootIndex = concepts.find((c) => c.path === "index.md");
+    const baseIri = rootIndex ? readBaseIri(parse(rootIndex.content).data) : null;
+
+    const found = concepts
+      .map((c) => ({
+        path: c.path,
+        issues: check(c.path, c.content, { isRoot: !c.path.includes("/"), baseIri, exists: (p) => present.has(p) }),
+      }))
+      .filter((r) => r.issues.length > 0);
+
+    const errCount = found.reduce((n, r) => n + errors(r.issues), 0);
+    const warnCount = found.reduce((n, r) => n + warnings(r.issues), 0);
+    expect("zero errors across the bundle", errCount === 0, found.map((r) => `${r.path}:\n${show(r.issues)}`).join("\n"));
+    console.log(`  characterized - ${warnCount} warning(s), not asserted`);
+  });
+}
+
+// (a) the lokf-scaffolding skeleton, with its <PLACEHOLDER> tokens filled in as
+// a real project would. scripts/fixtures/scaffolding-skeleton is a frozen copy
+// of lokf-agent-skills' skills/lokf-scaffolding/templates/knowledge - a golden
+// fixture, refreshed deliberately from a tagged release, never read live from
+// an installed (and git-ignored) skill.
+validateBundle("lokf-scaffolding template skeleton", join(repoRoot, "scripts", "fixtures", "scaffolding-skeleton"), {
+  required: true,
+  transform: (c) =>
+    c
+      .replaceAll("<BASE_IRI>", "https://acme.example/knowledge/")
+      .replaceAll("<PROJ_NAME>", "Acme")
+      .replaceAll("<PROJ_DESC>", "Acme's knowledge bundle.")
+      .replaceAll("<PROJ_SLUG>", "acme")
+      .replaceAll("<OWNER_SLUG>", "acme-org")
+      .replaceAll("<OWNER_NAME>", "Acme Org")
+      .replaceAll("<TODAY>", "2026-01-01"),
+});
+
+// (b) this repo's own bundle.
+validateBundle("lokf-enforcer's own .lokf/knowledge", join(repoRoot, ".lokf", "knowledge"), { required: true });
+
+// (c) any other real bundle, opt-in so this suite stays hermetic - its result
+// must not depend on what happens to sit next to the checkout. Point it at a
+// curated bundle to check the rules against one:
+//   LOKF_EXTRA_BUNDLE=../lokf-agent-skills/.lokf/knowledge npm run smoke-test
+const extraBundle = process.env["LOKF_EXTRA_BUNDLE"];
+if (extraBundle) validateBundle(`external bundle (${extraBundle})`, extraBundle, { required: true });
 
 console.log(`\n${failures === 0 ? "PASS" : "FAIL"} - ${failures} failing expectation(s)`);
 process.exit(failures === 0 ? 0 : 1);
