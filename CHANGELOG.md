@@ -14,6 +14,7 @@ No version below has been published as a GitHub release yet, so entries describe
 - Golden-fixture bundle checks in `npm run smoke-test`: the full rule set runs over a frozen scaffolding-template skeleton and this repo's own `.lokf/knowledge/`, asserting zero errors; point `LOKF_EXTRA_BUNDLE` at another bundle to check it too.
 - This repo's own `.lokf/knowledge/` bundle is maintained by `lokf-agent-skills` installed at run time rather than committed, matching their hygiene guidance; CI installs the librarian skill pinned to a tagged release. No skill is a plugin dependency.
 - README rewritten: framing shared with `lokf-agent-skills`, a "Where this fits" section placing the plugin on the four-tier trust model with an explicit no-dependency statement, an Install section, a repo layout, and Credits.
+- Add lint-and-docs.yaml workflow, lychee config
 
 ### Changed
 - The scaffold command now writes `publisher.id` as `person/<slug>` to agree with `type: Person` (previously `org/<slug>`).
