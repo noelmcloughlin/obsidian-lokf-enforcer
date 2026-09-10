@@ -87,7 +87,7 @@ export class LokfReportView extends ItemView {
 
   setProgress(frac: number, label?: string) {
     if (!this.progressBar || !this.progressLabel) return;
-    this.progressBar.style.width = `${Math.round(Math.min(1, Math.max(0, frac)) * 100)}%`;
+    this.progressBar.setCssStyles({ width: `${Math.round(Math.min(1, Math.max(0, frac)) * 100)}%` });
     if (label) this.progressLabel.setText(label);
   }
 

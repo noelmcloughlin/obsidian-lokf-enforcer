@@ -175,10 +175,22 @@ function normalizeTypeKey(type: string): string {
   return type.trim().replace(/\s+/g, "").toLowerCase();
 }
 
+// isKnownType runs once per note, so the normalized vocabulary is cached
+// rather than rebuilt per call. Keyed by array identity, which is sound only
+// because a settings list is always REPLACED, never mutated in place
+// (settings.ts assigns a fresh parseCsv() array on every edit) - an in-place
+// push here would leave this cache stale.
+const normalizedTypeSets = new WeakMap<string[], Set<string>>();
+
 function isKnownType(type: string, knownTypes: string[]): boolean {
   const key = normalizeTypeKey(type);
   if (!key) return false;
-  return knownTypes.some((t) => normalizeTypeKey(t) === key);
+  let set = normalizedTypeSets.get(knownTypes);
+  if (!set) {
+    set = new Set(knownTypes.map(normalizeTypeKey));
+    normalizedTypeSets.set(knownTypes, set);
+  }
+  return set.has(key);
 }
 
 function hasScheme(s: string): boolean {
