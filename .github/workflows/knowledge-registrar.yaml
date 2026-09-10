@@ -1,22 +1,21 @@
-name: Knowledge Bundle Validation
+name: Knowledge Registrar
 
-# Validate the LOKF knowledge bundle whenever it (or its tooling) changes, and on
-# a weekly schedule.
+# The registrar's job: keep the LOKF knowledge bundle's records well-formed and
+# provenanced - never judge whether their content is true, that's the curator's
+# job. Validates the bundle whenever it (or its tooling) changes, and on a
+# weekly schedule.
 on:
   pull_request:
     paths:
       - ".lokf/**"
-      - ".github/workflows/knowledge-validate.yaml"
+      - ".github/workflows/knowledge-registrar.yaml"
   schedule:
     - cron: "0 6 * * 1" # Mondays at 06:00 UTC
   workflow_dispatch:
 
-# Least-privilege default, as in the other workflows; the job opts into read.
-permissions: {}
-
 # Cancel superseded runs on the same ref to save runner time.
 concurrency:
-  group: knowledge-validate-${{ github.ref }}
+  group: knowledge-registrar-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -26,8 +25,6 @@ jobs:
     permissions:
       contents: read
     steps:
-      # Same audit-mode egress monitor build.yml and release.yml run; `uv sync`
-      # below executes package installs, so it gets the same watch.
       - name: Harden the runner
         uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
         with:

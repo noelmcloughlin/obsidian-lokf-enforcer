@@ -21,8 +21,8 @@ whole repo), `lint-workflows` (`actionlint` over the GitHub Actions YAML
 itself), and `validate-markdown` (`markdownlint-cli2` against
 `.markdownlint-cli2.jsonc`, then `lychee` link-checking, then `codespell`)
 over every `**/*.md` file. It never touches the Node build (`build.yml`) or
-the LOKF bundle's own semantics (the separate knowledge-validate workflow,
-when one exists) - this is the CI-hardening pass backported from
+the LOKF bundle's own semantics (the separate `knowledge-registrar.yaml`
+workflow) - this is the CI-hardening pass backported from
 `lokf-agent-skills`'s own `validate.yml`. Each job repeats the same
 `step-security/harden-runner` (audit mode) + `actions/checkout`
 (`persist-credentials: false`) preamble as `release.yml`, with

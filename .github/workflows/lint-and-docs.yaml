@@ -2,7 +2,7 @@ name: Lint & docs
 
 # Static checks for the shell, workflows, and prose this repo ships. These
 # never touch the Node build (see build.yml) or the LOKF bundle's own
-# semantics (see knowledge-validate.yaml) - this is the CI-hardening pass
+# semantics (see knowledge-registrar.yaml) - this is the CI-hardening pass
 # backported from lokf-agent-skills's validate.yml (FIXES.md F1-F3).
 on:
   push:
@@ -71,6 +71,7 @@ jobs:
         uses: DavidAnson/markdownlint-cli2-action@21c1be1b93ad9ed58fa840aacc3f279cde2a72ff # v24.2.0
         with:
           globs: '**/*.md'
+          config: .markdownlint-cli2.jsonc
       - name: Check links
         uses: lycheeverse/lychee-action@e7477775783ea5526144ba13e8db5eec57747ce8 # v2.9.0
         with:
