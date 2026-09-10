@@ -44,6 +44,7 @@ A [LOKF](https://lokf.nolan-nichols.com) knowledge base for the **LOKF Enforcer*
 * [Knowledge sources](playbooks/knowledge-sources.md)
 * [Contributing](playbooks/contributing.md)
 * [Releasing](playbooks/releasing.md)
+* [Quality gates](playbooks/quality-gates.md)
 
 # Policies
 

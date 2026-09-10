@@ -17,6 +17,7 @@ generated:
 | `README.md` | commands/settings tables, privacy stance | diff the Commands/Settings/Privacy sections |
 | `CONTRIBUTING.md` | the contributing/releasing playbooks | diff against the current dev-setup and release-flow sections |
 | `.github/workflows/build.yml`, `.github/workflows/release.yml` | CI/release facts referenced in the releasing playbook | diff the pinned-action SHAs, permissions, and trigger conditions |
+| `.github/workflows/lint-and-docs.yaml`, `.markdownlint-cli2.jsonc` | the quality-gates playbook | diff the three job names/tools and the markdownlint rule overrides |
 | `scripts/smoke-test.ts` | the plain-Node testability claim in the validator-engine concept | confirm it still imports only from `../src/validator` |
 | `CHANGELOG.md`, `versions.json`, `git tag` | release history | see note below |
 | PyPI `lokf` package | `.lokf/pyproject.toml`'s `lokf[build]>=` floor | `pip index versions lokf`; bump the floor on a minor/patch release, ask the human first on a major one |

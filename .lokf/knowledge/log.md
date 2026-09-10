@@ -1,5 +1,36 @@
 # Change Log
 
+## 2026-09-11
+* **Corrected** `services/lokf-enforcer-plugin.md`, `references/commands-and-settings.md`:
+  both described a fourth command, `check-sibling-plugin`, "re-checking for
+  an installed OKF validator" via `app.plugins`. That detection
+  (`detectOkfValidator`) is commented out in `src/main.ts` - not a public
+  API, flagged in community-plugin review - and was never wired to a
+  command; only three commands exist (`validate-vault`, `validate-active`,
+  `scaffold-root-header`), and the sibling notice now fires unconditionally
+  rather than only when the sibling is absent. `README.md` already stated
+  this correctly; only the bundle's own concepts had drifted.
+* **Corrected** `services/report-view.md`: attributed `processQueue`/batch
+  size 50 to `src/report-view.ts` itself. That batching lives in
+  `src/main.ts` (see `lokf-enforcer-plugin.md`) and the batch size is the
+  user-configurable `batchSize` setting, not a hardcoded constant;
+  `report-view.ts` only renders the progress bar it's driven with.
+* **Added** `playbooks/quality-gates.md` (`status: draft`): the
+  `.github/workflows/lint-and-docs.yaml` CI workflow (ShellCheck,
+  actionlint, markdownlint-cli2 + `.markdownlint-cli2.jsonc`, lychee,
+  codespell) had no concept and wasn't in the source map, despite being
+  committed since 2026-09-08 (`e735ffe`). Extended `knowledge-sources.md`
+  with a row for it and its markdownlint config.
+* **Re-verified**: `playbooks/contributing.md` (enriched to describe the
+  git-ignored-`main.js` "Failed to load plugin" failure mode, matching
+  `CONTRIBUTING.md`'s newly added guidance), `playbooks/releasing.md`,
+  `services/validator-engine.md`, `services/settings-tab.md`,
+  `policies/no-telemetry.md`, `references/lokf-toolkit.md` (PyPI `lokf`
+  still at `0.7.0` - `pyproject.toml`'s floor needs no bump) - no other
+  drift found. The three external-spec-URL references (LOKF spec, OKF spec,
+  Obsidian plugin guidelines) and the glossary/explanation concepts were not
+  re-fetched this run and remain unverified.
+
 ## 2026-09-10
 * **Corrected** the bundle header's `publisher.id`: it declared `type: Person`
   but minted under `org/` (`.../knowledge/org/noelmcloughlin`); now
