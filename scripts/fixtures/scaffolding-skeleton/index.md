@@ -7,8 +7,8 @@ title: <PROJ_NAME> Knowledge Bundle
 description: <PROJ_DESC>
 license: https://creativecommons.org/licenses/by/4.0/
 publisher:
-  type: Organization
-  id: <BASE_IRI>org/<OWNER_SLUG>
+  type: Person
+  id: <BASE_IRI>person/<OWNER_SLUG>
   name: <OWNER_NAME>
 ---
 

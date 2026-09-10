@@ -9,7 +9,7 @@ If you keep a structured knowledge base in Obsidian - a wiki, a team's shared br
 
 It speaks a particular dialect of structured notes called **LOKF** (more on that below) - on top of, not instead of, the Open Knowledge Format (OKF) v0.2 that [OKF Enforcer](https://github.com/MartinForReal/okf-enforcer) (or any other OKF v0.2 validator) already checks.
 
-If the [`lokf-agent-skills`](https://github.com/noelmcloughlin/lokf-agent-skills) are the library's staff - one lays the network, one binds it into order, one holds the scales, one guides the visitors - this plugin is the house style on the cataloguing desk. **It checks each record as it is written, and vouches for nothing.**
+If the [`lokf-agent-skills`](https://github.com/noelmcloughlin/lokf-agent-skills) are the library's staff - one lays the network, one binds it into order, one holds the scales, one guides the visitors - this plugin is the registrar at the cataloguing desk. **It checks each record as it is written, and vouches for nothing.**
 
 > **For AI agents:** if `.lokf/knowledge/index.md` exists in this repository, read it first - it is a queryable [LOKF](https://lokf.nolan-nichols.com) knowledge bundle with repository-specific context that plain prose can't express. A concept marked `status: draft` has not yet been confirmed by a person; one with a `human:` entry under `verified` has - weigh them accordingly. The `lokf-docent` skill, if installed, is the disciplined way to answer from the bundle.
 

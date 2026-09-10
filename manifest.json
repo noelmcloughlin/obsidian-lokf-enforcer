@@ -3,7 +3,7 @@
 	"name": "LOKF Enforcer",
 	"version": "0.3.0",
 	"minAppVersion": "1.13.0",
-	"description": "Validate the Linked Open Knowledge Format (LOKF) semantic layer on top of OKF v0.2: the bundle-root semantic header, base_iri authority and IRI minting, the type vocabulary, and typed relationships. Companion to an OKF v0.2 validator.",
+	"description": "Catch broken note links, missing properties, invalid note types in your frontmatter as you write, so your vault stays a clean shared knowledge graph. Fills a Registrar role for Linked Open Knowledge Format (LOFK), a semantic OKF layer.",
 	"author": "Noel McLoughlin",
 	"authorUrl": "https://github.com/noelmcloughlin",
 	"isDesktopOnly": false

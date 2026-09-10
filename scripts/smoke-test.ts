@@ -528,8 +528,8 @@ validateBundle("lokf-scaffolding template skeleton", join(repoRoot, "scripts", "
       .replaceAll("<PROJ_NAME>", "Acme")
       .replaceAll("<PROJ_DESC>", "Acme's knowledge bundle.")
       .replaceAll("<PROJ_SLUG>", "acme")
-      .replaceAll("<OWNER_SLUG>", "acme-org")
-      .replaceAll("<OWNER_NAME>", "Acme Org")
+      .replaceAll("<OWNER_SLUG>", "acme-maintainer")
+      .replaceAll("<OWNER_NAME>", "Acme Maintainer")
       .replaceAll("<TODAY>", "2026-01-01"),
 });
 
