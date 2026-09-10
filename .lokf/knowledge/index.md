@@ -8,7 +8,7 @@ description: Validate the Linked Open Knowledge Format (LOKF) semantic layer on 
 license: https://creativecommons.org/licenses/by/4.0/
 publisher:
   type: Person
-  id: https://lokf-enforcer.example/knowledge/org/noelmcloughlin
+  id: https://lokf-enforcer.example/knowledge/person/noelmcloughlin
   name: Noel McLoughlin
 ---
 
