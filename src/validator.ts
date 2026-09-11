@@ -13,6 +13,13 @@ export interface LokfIssue {
   severity: LokfSeverity;
   rule: string;
   message: string;
+  /** The frontmatter key (or key path like `publisher.type`,
+   *  `relations[2].target`) the finding is about, when one can be named. A UI
+   *  layer resolves it to a line/column via `locateFrontmatterKey` (locator.ts)
+   *  for inline underlines and jump-to-line. Absent when the finding is about
+   *  the note as a whole, or about a field that is missing entirely (there is
+   *  no key to point at), in which case callers fall back to the header. */
+  key?: string;
 }
 
 export interface LokfSettings {
@@ -26,9 +33,41 @@ export interface LokfSettings {
   placeholderDomains: string[];
   warnMissingHeader: boolean;
   checkRelationTargets: boolean;
+  /** Validate the *shape* of the OKF v0.2 §5 trust/lifecycle fields a bundle
+   *  actually uses (verified/generated actors, status, stale_after) - the
+   *  substrate LOKF's curation ceremony stands on. Produces nothing on a
+   *  bundle that carries no §5 fields; deeper credibility/tier interpretation
+   *  stays an installed OKF validator's job. */
+  checkTrustShape: boolean;
+  /** The lifecycle values `status` may take, from the LOKF schema. */
+  conceptStatuses: string[];
+  /** A note whose frontmatter sets this key to a truthy opt-out value (e.g.
+   *  `lokf: ignore`) is silenced entirely - no findings, no underlines, no
+   *  report rows. Blank turns the opt-out off. The note still counts as a
+   *  concept in the bundle graph; only its findings are suppressed. */
+  ignoreFrontmatterKey: string;
+  /** Rule ids whose *warnings* should be raised to errors (e.g. `lokf/3-vocab`).
+   *  Escalation only: a finding that is already an error by default is never
+   *  downgraded, so the "warnings, not errors" contract can only get stricter,
+   *  never invert. */
+  escalateToError: string[];
+  /** Advanced: `user=canonical` pairs mapping a vault's own frontmatter key
+   *  spelling onto the LOKF one (e.g. `depends_on=dependsOn`) before validation,
+   *  so a vault that never adopted the canonical keys can still be checked
+   *  without renaming them. Off (empty) by default - on, it stops the plugin
+   *  flagging the divergence, which is why it is opt-in and advanced. */
+  fieldAliases: string[];
   excludeFolders: string[];
   batchSize: number;
   recommendSiblingPlugin: boolean;
+  /** Underline offending frontmatter values inline, in the editor, with the
+   *  finding on hover - the live counterpart to the side report. Off leaves
+   *  the editor untouched and the panel the only surface. */
+  inlineDiagnostics: boolean;
+  /** Offer LOKF-aware value completions while editing a concept's frontmatter
+   *  (type/genre/status classes, relation predicates, and the other concepts a
+   *  relation can point at) - so a value is picked, not mistyped. */
+  autocomplete: boolean;
   /** Vault-relative folders, each the root (index.md, own base_iri/ids) of its
    *  own bundle. Empty means the whole vault is one implicit bundle - the
    *  usual Obsidian setup. Non-empty lets one vault hold several independent
@@ -59,6 +98,8 @@ export const KNOWN_LOKF_TYPES = [
 export const KNOWN_LOKF_VERSIONS = ["0.1", "0.2"];
 
 export const DEFAULT_GENRE_VALUES = ["tutorial", "how-to", "reference", "explanation"];
+
+export const DEFAULT_CONCEPT_STATUSES = ["draft", "stable", "deprecated"];
 
 export const RELATION_FIELDS = [
   "isPartOf",
@@ -102,9 +143,16 @@ export const DEFAULT_SETTINGS: LokfSettings = {
   placeholderDomains: DEFAULT_PLACEHOLDER_DOMAINS,
   warnMissingHeader: true,
   checkRelationTargets: true,
+  checkTrustShape: true,
+  conceptStatuses: DEFAULT_CONCEPT_STATUSES,
+  ignoreFrontmatterKey: "lokf",
+  escalateToError: [],
+  fieldAliases: [],
   excludeFolders: [],
   batchSize: 50,
   recommendSiblingPlugin: true,
+  inlineDiagnostics: true,
+  autocomplete: true,
   bundleRoots: [],
 };
 
@@ -229,6 +277,56 @@ export function isExcluded(path: string, settings: LokfSettings): boolean {
   return normalizedExcludeFolders(settings.excludeFolders).some(
     (folder) => path === folder || path.startsWith(folder + "/")
   );
+}
+
+// The opt-out is an allow-list, not general truthiness: a note is silenced only
+// when its opt-out key names an explicit skip, so an unrelated value under the
+// same key (someone typing `lokf: 0.2` by mistake) never quietly suppresses it.
+const IGNORE_VALUES = new Set(["ignore", "true", "yes", "on", "skip"]);
+
+/** Whether a note has opted out of validation via its frontmatter (the
+ *  `settings.ignoreFrontmatterKey` key set to a skip value). Blank key = off. */
+export function isIgnoredByFrontmatter(data: Record<string, unknown>, settings: LokfSettings): boolean {
+  const key = settings.ignoreFrontmatterKey.trim();
+  if (!key) return false;
+  const value = data[key];
+  if (value === true) return true;
+  if (typeof value === "string") return IGNORE_VALUES.has(value.trim().toLowerCase());
+  return false;
+}
+
+/** Raise the listed rules' warnings to errors (escalation only - a default
+ *  error is never touched, so a structural finding can't be downgraded and the
+ *  permissive contract only ever gets stricter). Returns the input untouched
+ *  when nothing is escalated, the common case. */
+export function applySeverityOverrides(issues: LokfIssue[], settings: LokfSettings): LokfIssue[] {
+  if (settings.escalateToError.length === 0) return issues;
+  const escalate = new Set(settings.escalateToError);
+  return issues.map((issue): LokfIssue =>
+    issue.severity === "warning" && escalate.has(issue.rule) ? { ...issue, severity: "error" } : issue
+  );
+}
+
+/** Rename a vault's own frontmatter keys onto the canonical LOKF ones per the
+ *  `user=canonical` alias list, before validation, so a note using `depends_on`
+ *  is checked as `dependsOn`. Copy-on-write and non-destructive: an alias whose
+ *  source key is absent, or whose target key is already present, is skipped, and
+ *  with no aliases the input is returned untouched. */
+export function applyFieldAliases(data: Record<string, unknown>, aliases: string[]): Record<string, unknown> {
+  if (aliases.length === 0) return data;
+  let result = data;
+  for (const entry of aliases) {
+    const eq = entry.indexOf("=");
+    if (eq <= 0) continue;
+    const user = entry.slice(0, eq).trim();
+    const canonical = entry.slice(eq + 1).trim();
+    if (!user || !canonical || user === canonical) continue;
+    if (!(user in result) || canonical in result) continue;
+    result = { ...result };
+    result[canonical] = result[user];
+    delete result[user];
+  }
+  return result;
 }
 
 export function splitFrontmatter(content: string): { hasFm: boolean; raw: string; body: string } {
@@ -370,6 +468,7 @@ export function validateRootHeader(
       issues.push({
         severity: "warning",
         rule: "lokf/2-header",
+        key: "lokf_version",
         message: `Declared lokf_version ${describeValue(data["lokf_version"])} is not one of ${KNOWN_LOKF_VERSIONS.join(" / ")}.`,
       });
     }
@@ -383,14 +482,19 @@ export function validateRootHeader(
       issues.push({
         severity: "error",
         rule: "lokf/2-header",
+        key: "base_iri",
         message: `base_iri ${describeValue(baseIriRaw)} is not a valid absolute http(s) URI - no IRI can be minted from it.`,
       });
     } else {
-      if (!baseIri.endsWith("/")) {
+      // A base_iri terminates in `/` (path namespace) or `#` (hash namespace);
+      // ids mint by straight concatenation, so an unterminated one would glue
+      // (`…/team` + `x` -> `…/teamx`). Matches lokf.yaml's base_iri pattern.
+      if (!baseIri.endsWith("/") && !baseIri.endsWith("#")) {
         issues.push({
           severity: "error",
           rule: "lokf/2-header",
-          message: `base_iri "${baseIri}" must end with "/" - concept ids are minted by straight concatenation.`,
+          key: "base_iri",
+          message: `base_iri "${baseIri}" must end with "/" or "#" - concept ids are minted by straight concatenation.`,
         });
       }
       // .hostname, not .host: the latter includes ":port", which would let
@@ -401,12 +505,14 @@ export function validateRootHeader(
         issues.push({
           severity: "error",
           rule: "lokf/2-authority",
+          key: "base_iri",
           message: `base_iri "${baseIri}" lives inside "${host}", a URL space this project doesn't control - mint IRIs from a namespace the project actually owns instead.`,
         });
       } else if (matchesDomainList(host, settings.placeholderDomains)) {
         issues.push({
           severity: "warning",
           rule: "lokf/2-authority",
+          key: "base_iri",
           message: `base_iri "${baseIri}" uses the placeholder domain "${host}" - replace with a real, owned namespace before publishing.`,
         });
       }
@@ -420,6 +526,7 @@ export function validateRootHeader(
       issues.push({
         severity: "warning",
         rule: "lokf/2-header",
+        key: "context",
         message: `context ${describeValue(contextRaw)} doesn't look like a URL.`,
       });
     }
@@ -431,6 +538,7 @@ export function validateRootHeader(
       issues.push({
         severity: "warning",
         rule: "lokf/2-header",
+        key: "publisher",
         message: "publisher should be a mapping with type/id/name, not a plain string or list.",
       });
     } else {
@@ -440,14 +548,15 @@ export function validateRootHeader(
         issues.push({
           severity: "warning",
           rule: "lokf/2-header",
+          key: "publisher.type",
           message: `publisher.type ${describeValue(publisher.type)} should be "Organization" or "Person".`,
         });
       }
       if (!publisher.id) {
-        issues.push({ severity: "warning", rule: "lokf/2-header", message: "publisher is missing id." });
+        issues.push({ severity: "warning", rule: "lokf/2-header", key: "publisher", message: "publisher is missing id." });
       }
       if (!publisher.name) {
-        issues.push({ severity: "warning", rule: "lokf/2-header", message: "publisher is missing name." });
+        issues.push({ severity: "warning", rule: "lokf/2-header", key: "publisher", message: "publisher is missing name." });
       }
     }
   }
@@ -455,7 +564,7 @@ export function validateRootHeader(
   for (const field of ["title", "description", "license"] as const) {
     const v = data[field];
     if (v !== undefined && typeof v !== "string") {
-      issues.push({ severity: "warning", rule: "lokf/2-header", message: `${field} should be a string.` });
+      issues.push({ severity: "warning", rule: "lokf/2-header", key: field, message: `${field} should be a string.` });
     }
   }
 
@@ -478,13 +587,14 @@ function validateFieldsAndDistribution(data: Record<string, unknown>): LokfIssue
   const fields = data["fields"];
   if (fields !== undefined) {
     if (!Array.isArray(fields)) {
-      issues.push({ severity: "error", rule: "lokf/3-fields", message: "fields must be a list of Field objects." });
+      issues.push({ severity: "error", rule: "lokf/3-fields", key: "fields", message: "fields must be a list of Field objects." });
     } else {
       fields.forEach((entry, i) => {
         if (!isPlainObject(entry)) {
           issues.push({
             severity: "error",
             rule: "lokf/3-fields",
+            key: `fields[${i}]`,
             message: `fields[${i}] must be a structured Field object ({name, description, datatype, …}), not a plain string or URL.`,
           });
         }
@@ -498,6 +608,7 @@ function validateFieldsAndDistribution(data: Record<string, unknown>): LokfIssue
       issues.push({
         severity: "error",
         rule: "lokf/3-fields",
+        key: "distribution",
         message: "distribution must be a list of Distribution objects.",
       });
     } else {
@@ -506,12 +617,14 @@ function validateFieldsAndDistribution(data: Record<string, unknown>): LokfIssue
           issues.push({
             severity: "error",
             rule: "lokf/3-fields",
+            key: `distribution[${i}]`,
             message: `distribution[${i}] must be a structured Distribution object ({access_url, name?, description?, media_type?}), not a plain string or URL.`,
           });
         } else if (!(entry as DistributionShape).access_url) {
           issues.push({
             severity: "warning",
             rule: "lokf/3-fields",
+            key: `distribution[${i}]`,
             message: `distribution[${i}] is missing access_url.`,
           });
         }
@@ -536,6 +649,7 @@ export function validateTypeVocabulary(data: Record<string, unknown>, settings: 
     issues.push({
       severity: "warning",
       rule: "lokf/3-vocab",
+      key: "type",
       message: `type ${describeValue(typeRaw)} should be a single string naming a LOKF class, not a list or mapping.`,
     });
     return issues;
@@ -547,6 +661,7 @@ export function validateTypeVocabulary(data: Record<string, unknown>, settings: 
     issues.push({
       severity: "warning",
       rule: "lokf/3-vocab",
+      key: "type",
       message: `type "${type}" is not one of the LOKF vocabulary classes - treated as a generic lokf:Concept.`,
     });
   }
@@ -558,6 +673,7 @@ export function validateTypeVocabulary(data: Record<string, unknown>, settings: 
       issues.push({
         severity: "warning",
         rule: "lokf/3-genre",
+        key: "genre",
         message: `genre ${describeValue(genreRaw)} should be one of: ${settings.genreValues.join(", ")}.`,
       });
     }
@@ -573,7 +689,10 @@ export function validateTypeVocabulary(data: Record<string, unknown>, settings: 
       }
     }
   } else if (typeKey === "service" && settings.warnTypeSpecificFields) {
-    for (const f of ["endpoint", "http_method", "documentation"]) {
+    // http_method is deliberately not recommended (lokf.yaml): its own spec
+    // says "if applicable", and a GraphQL, gRPC, or whole-REST-API Service has
+    // no single verb.
+    for (const f of ["endpoint", "documentation"]) {
       if (data[f] === undefined) {
         issues.push({ severity: "warning", rule: "lokf/3-fields", message: `Service concept is missing recommended field "${f}".` });
       }
@@ -583,7 +702,7 @@ export function validateTypeVocabulary(data: Record<string, unknown>, settings: 
       issues.push({ severity: "warning", rule: "lokf/3-fields", message: `GlossaryTerm concept is missing recommended field "definition".` });
     }
     if (data["abbreviation"] !== undefined && typeof data["abbreviation"] !== "string") {
-      issues.push({ severity: "warning", rule: "lokf/3-fields", message: "abbreviation should be a string." });
+      issues.push({ severity: "warning", rule: "lokf/3-fields", key: "abbreviation", message: "abbreviation should be a string." });
     }
   }
 
@@ -668,13 +787,14 @@ export function validateRelationships(
   const checkTargets = (field: string, raw: unknown, mustBeList = false) => {
     if (raw === undefined) return;
     if (typeof raw !== "string" && !Array.isArray(raw)) {
-      issues.push({ severity: "warning", rule: "lokf/4-relations", message: `${field} should be a string or a list of strings.` });
+      issues.push({ severity: "warning", rule: "lokf/4-relations", key: field, message: `${field} should be a string or a list of strings.` });
       return;
     }
     if (mustBeList && !Array.isArray(raw)) {
       issues.push({
         severity: "warning",
         rule: "lokf/4-relations",
+        key: field,
         message: `${field} is a single value, but the LOKF schema requires a list even for one target - write "${field}:" on its own line with "- ${raw}" indented below it.`,
       });
     }
@@ -682,7 +802,7 @@ export function validateRelationships(
     for (const v of values) {
       const resolved = resolveRelationTarget(v, baseIri);
       if (resolved.kind === "malformed") {
-        issues.push({ severity: "warning", rule: "lokf/4-relations", message: `${field} has an empty or non-string target.` });
+        issues.push({ severity: "warning", rule: "lokf/4-relations", key: field, message: `${field} has an empty or non-string target.` });
         continue;
       }
       // Both a full IRI under base_iri and a bare relative path name something
@@ -695,6 +815,7 @@ export function validateRelationships(
         issues.push({
           severity: "warning",
           rule: "lokf/4-relations",
+          key: field,
           message: `${field} -> "${resolved.raw}" does not resolve to a file in this vault.`,
         });
       }
@@ -708,25 +829,26 @@ export function validateRelationships(
   const relations = data["relations"];
   if (relations !== undefined) {
     if (!Array.isArray(relations)) {
-      issues.push({ severity: "warning", rule: "lokf/4-relations", message: "relations must be a list of {predicate, target} objects." });
+      issues.push({ severity: "warning", rule: "lokf/4-relations", key: "relations", message: "relations must be a list of {predicate, target} objects." });
     } else {
       relations.forEach((entry, i) => {
         if (!isPlainObject(entry)) {
-          issues.push({ severity: "warning", rule: "lokf/4-relations", message: `relations[${i}] must be a {predicate, target} object.` });
+          issues.push({ severity: "warning", rule: "lokf/4-relations", key: `relations[${i}]`, message: `relations[${i}] must be a {predicate, target} object.` });
           return;
         }
         const rel = entry as { predicate?: unknown; target?: unknown };
         if (typeof rel.predicate !== "string" || !rel.predicate.trim()) {
-          issues.push({ severity: "warning", rule: "lokf/4-relations", message: `relations[${i}] is missing a predicate.` });
+          issues.push({ severity: "warning", rule: "lokf/4-relations", key: `relations[${i}]`, message: `relations[${i}] is missing a predicate.` });
         } else if (settings.warnUnknownPredicate && !settings.knownPredicates.includes(rel.predicate.trim())) {
           issues.push({
             severity: "warning",
             rule: "lokf/4-relations",
+            key: `relations[${i}].predicate`,
             message: `relations[${i}] predicate "${rel.predicate.trim()}" is not in the known RelationType list.`,
           });
         }
         if (rel.target === undefined) {
-          issues.push({ severity: "warning", rule: "lokf/4-relations", message: `relations[${i}] is missing a target.` });
+          issues.push({ severity: "warning", rule: "lokf/4-relations", key: `relations[${i}]`, message: `relations[${i}] is missing a target.` });
         } else {
           checkTargets(`relations[${i}].target`, rel.target);
         }
@@ -754,6 +876,7 @@ export function validateConceptId(data: Record<string, unknown>, path: string, b
       {
         severity: "warning",
         rule: "lokf/5-id",
+        key: "id",
         message: `id ${describeValue(idRaw)} should be a single IRI string.`,
       },
     ];
@@ -767,9 +890,113 @@ export function validateConceptId(data: Record<string, unknown>, path: string, b
     {
       severity: "warning",
       rule: "lokf/5-id",
+      key: "id",
       message: `id "${id}" does not match the id this bundle's base_iri would mint ("${expected}") - fine if intentionally a stable external id.`,
     },
   ];
+}
+
+// ---- Golden Rule 5: trust/lifecycle field shapes (OKF v0.2 §5) ----
+//
+// The §5 fields originated in OKF v0.2 but are defined in the LOKF schema and
+// are the load-bearing substrate of LOKF's curation ceremony (draft → verified
+// → stale), so their *shape* is LOKF Enforcer's business - not the deep
+// credibility/tier interpretation, which stays an installed OKF validator's
+// job. Every finding is a warning, and nothing fires on a bundle that carries
+// no §5 fields, so a plain LOKF bundle sees no new noise.
+
+function isDateObject(value: unknown): boolean {
+  return Object.prototype.toString.call(value) === "[object Date]" && !isNaN((value as Date).getTime());
+}
+
+const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+const DATETIME_RE = /^\d{4}-\d{2}-\d{2}([T ]\d{2}:\d{2}(:\d{2})?(\.\d+)?(Z|[+-]\d{2}:?\d{2})?)?$/;
+// An OKF §7 provenance actor literal for a `by` slot: `human:<id>`,
+// `process:<id>`, or a bare `<producer>/<version>`. Matches lokf.yaml's `by`
+// pattern exactly - deliberately stricter than a source's `author`, which
+// admits any `<prefix>:<id>` (e.g. `team:analytics`); a `by` value narrower
+// than the schema's would let the trust-tier derivation read an actor the
+// real validator rejects.
+const ACTOR_RE = /^(?:(?:human|process):\S+|[^\s/]+\/[^\s/]+)$/;
+
+/** One `{ by, at }` event under `generated` or an entry of `verified`. */
+function validateTrustEvent(label: string, keyPath: string, entry: unknown, issues: LokfIssue[]): void {
+  if (!isPlainObject(entry)) {
+    issues.push({ severity: "warning", rule: "lokf/5-trust", key: keyPath, message: `${label} should be a mapping with { by, at }.` });
+    return;
+  }
+  const by = entry["by"];
+  if (by === undefined) {
+    issues.push({ severity: "warning", rule: "lokf/5-trust", key: keyPath, message: `${label} is missing "by" - the actor that performed it, from which trust tiers derive.` });
+  } else {
+    const actor = asScalar(by);
+    if (actor === null || !actor.trim()) {
+      issues.push({ severity: "warning", rule: "lokf/5-trust", key: `${keyPath}.by`, message: `${label} "by" ${describeValue(by)} should be a non-empty OKF §7 actor string (human:<id>, process:<id>, or <producer>/<version>).` });
+    } else if (!ACTOR_RE.test(actor.trim())) {
+      issues.push({ severity: "warning", rule: "lokf/5-trust", key: `${keyPath}.by`, message: `${label} "by" "${actor}" doesn't look like an OKF §7 actor (human:<id>, process:<id>, or <producer>/<version>) - trust tiers derive from the human: prefix.` });
+    }
+  }
+  const at = entry["at"];
+  if (at !== undefined && !isDateObject(at)) {
+    const scalar = asScalar(at);
+    if (scalar === null || !DATETIME_RE.test(scalar)) {
+      issues.push({ severity: "warning", rule: "lokf/5-trust", key: `${keyPath}.at`, message: `${label} "at" ${describeValue(at)} should be an ISO 8601 date or datetime.` });
+    }
+  }
+}
+
+export function validateTrustLifecycle(data: Record<string, unknown>, settings: LokfSettings): LokfIssue[] {
+  if (!settings.checkTrustShape) return [];
+  const issues: LokfIssue[] = [];
+
+  const generated = data["generated"];
+  if (generated !== undefined) validateTrustEvent("generated", "generated", generated, issues);
+
+  const verified = data["verified"];
+  if (verified !== undefined) {
+    if (Array.isArray(verified)) {
+      verified.forEach((entry, i) => validateTrustEvent(`verified[${i}]`, `verified[${i}]`, entry, issues));
+    } else if (isPlainObject(verified)) {
+      // A single event mapping is tolerated - the schema normalizes it to a
+      // one-element list, exactly as with a single relation target.
+      validateTrustEvent("verified", "verified", verified, issues);
+    } else {
+      issues.push({ severity: "warning", rule: "lokf/5-trust", key: "verified", message: "verified should be a list of { by, at } events (or a single such mapping)." });
+    }
+  }
+
+  const status = data["status"];
+  if (status !== undefined) {
+    const scalar = asScalar(status);
+    if (scalar === null || !settings.conceptStatuses.includes(scalar)) {
+      issues.push({ severity: "warning", rule: "lokf/5-lifecycle", key: "status", message: `status ${describeValue(status)} should be one of: ${settings.conceptStatuses.join(", ")}.` });
+    }
+  }
+
+  const staleAfter = data["stale_after"];
+  if (staleAfter !== undefined && !isDateObject(staleAfter)) {
+    const scalar = asScalar(staleAfter);
+    if (scalar === null || !DATE_RE.test(scalar)) {
+      issues.push({ severity: "warning", rule: "lokf/5-lifecycle", key: "stale_after", message: `stale_after ${describeValue(staleAfter)} should be an absolute date (YYYY-MM-DD).` });
+    }
+  }
+
+  const sources = data["sources"];
+  if (sources !== undefined) {
+    if (!Array.isArray(sources)) {
+      issues.push({ severity: "warning", rule: "lokf/5-trust", key: "sources", message: "sources should be a list of { resource, … } objects." });
+    } else {
+      sources.forEach((entry, i) => {
+        if (!isPlainObject(entry)) {
+          issues.push({ severity: "warning", rule: "lokf/5-trust", key: `sources[${i}]`, message: `sources[${i}] should be a { resource, … } object.` });
+        } else if (entry["resource"] === undefined || (typeof entry["resource"] === "string" && !entry["resource"].trim())) {
+          issues.push({ severity: "warning", rule: "lokf/5-trust", key: `sources[${i}]`, message: `sources[${i}] is missing the required "resource".` });
+        }
+      });
+    }
+  }
+
+  return issues;
 }
 
 // ---- Orchestrator ----
@@ -789,16 +1016,24 @@ export function validateLokfConcept(
 ): LokfIssue[] {
   const reserved = isReserved(path);
 
-  if (reserved === "index" && isRoot) return validateRootHeader(data, hasFm, settings);
+  // A note that has explicitly opted out is silenced before any rule runs -
+  // including the root header - but stays a concept in the bundle graph.
+  if (hasFm && isIgnoredByFrontmatter(data, settings)) return [];
+
+  if (reserved === "index" && isRoot) return applySeverityOverrides(validateRootHeader(data, hasFm, settings), settings);
   if (reserved) return []; // non-root index.md / log.md carry no LOKF surface
   if (!hasFm) return []; // missing frontmatter entirely is the OKF validator's error
 
   const cut = path.lastIndexOf("/");
   const conceptDir = cut > 0 ? path.slice(0, cut) : "";
 
-  return [
-    ...validateTypeVocabulary(data, settings),
-    ...validateRelationships(data, baseIri, settings, exists, conceptDir),
-    ...validateConceptId(data, path, baseIri),
-  ];
+  return applySeverityOverrides(
+    [
+      ...validateTypeVocabulary(data, settings),
+      ...validateRelationships(data, baseIri, settings, exists, conceptDir),
+      ...validateConceptId(data, path, baseIri),
+      ...validateTrustLifecycle(data, settings),
+    ],
+    settings
+  );
 }

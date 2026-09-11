@@ -4,7 +4,37 @@ All notable changes to this project are documented here. The format is based on 
 
 No version below has been published as a GitHub release yet, so entries describe development history against `main`, not user-facing upgrades. No tags exist yet either, which is why version headings carry no compare links.
 
-## [Unreleased]
+## [0.4.0] - 2026-09-11
+
+### Added
+
+- **Inline diagnostics** (Settings → In-editor diagnostics, on): a CodeMirror 6 extension underlines the offending frontmatter value as you type - wavy red for errors, amber for warnings - with the finding on hover. Reads its file via `editorInfoField`, pulls findings back synchronously; two rules on one value merge into one underline.
+- **Jump-to-line from the report**: every finding row is clickable and keyboard-operable, opening the note with the cursor on the offending key (its value selected). Synthetic bundle-level rows stay inert.
+- **Key anchors on findings** (`base_iri`, `publisher.type`, `relations[2].target`, …) - the prerequisite for the underline and jump. New import-free, Node-tested `src/locator.ts` maps a key path to its line/column in the raw frontmatter, with graceful fallback.
+- **Incremental re-validation**: editing a note re-checks just that note from the metadata cache instead of a full rescan; a root `index.md` re-checks its bundle only when `base_iri` changes; deletes/renames patch the panel in place. Coalesced across keystroke bursts via `metadataCache.on("changed")`.
+- **Schema-derived vocabulary manifest** (`src/lokf-vocab.json`, `npm run build-vocab` from a pinned `lokf.yaml`): the default type/predicate/genre vocabulary is now derived from the LOKF schema and refreshes on upgrade for any list you haven't customised - adding the `Role` type and the full 15-value `RelationType`. Bundled as static data with fallback to the built-in constants; `validator.ts` stays import-free.
+- **Concept graph + quick-switcher**: an in-memory index of each concept's type, id, resolved relation targets, and inverse links. Two commands - "Find a concept" (a keyboard-first `SuggestModal` showing type + in/out counts) and "Find an orphan concept". Built on demand from the cache, reusing the relation check's own resolution; import-free `src/graph.ts`.
+- **Trust/lifecycle shape checks (OKF v0.2 §5)**: when a bundle uses them, validates the *shape* of `verified`/`generated` (well-formed `{ by, at }` with an OKF §7 actor), `status`, `stale_after`, and `sources` - never their credibility *depth* (an OKF validator's job). All warnings, nothing fires without §5 fields, on-by-default toggle.
+- **Frontmatter value autocomplete**: an `EditorSuggest` for `type`/`genre`/`status`/predicate values and relation targets (from the graph), with aliases/notes from the manifest. Never suggests key names; on-by-default toggle. Import-free `src/suggest-context.ts`.
+- **Safe quick-fixes** (command "Fix safe issues in the active note"): applies every deterministic correction in one undo step - append a missing `base_iri` terminator, rewrite a known type alias to its canonical class, and turn a bare-string relation into a one-item list. Format-preserving edits from the finding's key anchor; never guesses an owned value (base_iri authority, publisher). Import-free `src/fixes.ts`. A vault-wide **"Fix safe issues across the vault"** command applies the same fixes to every note in one pass, behind a confirmation.
+- **Promote body links to typed relations** (command): finds body links resolving to another concept and guesses a typed relation from the surrounding sentence (cue-phrase table, adjacency boost, `relatedTo` fallback), modelled on `lokf propose`. A review dialog confirms each before writing via `processFrontMatter`; code/image/external/already-asserted links are skipped. Import-free `src/propose.ts`.
+- **Per-note opt-out** (Settings → Scope and performance, key default `lokf`): `lokf: ignore` (or `true`/`yes`/`on`/`skip`) silences a note entirely while it stays a concept in the graph. An allow-list, not general truthiness; blank the key to turn it off. (`isIgnoredByFrontmatter`.)
+- **Disable on this device** (Settings → This device): a device-local switch (via `loadLocalStorage`/`saveLocalStorage`, never synced) that silences the status bar, inline underlines, autocomplete, incremental re-validation, scanning, and every explicit command - so a phone-synced vault can turn the plugin off there.
+- **Per-rule severity escalation** (Settings → Rule severity): a list of rule ids whose warnings become errors, for stricter gating. Escalation only - a default error is never downgraded - applied uniformly, including synthetic bundle-level findings. (`applySeverityOverrides`.)
+- **Report filter + finding navigation**: a filter box narrows the list as you type (plain text, `sev:error`, `rule:lokf/2`, ANDed, debounced); three commands ride the same predicate - "Go to a finding" (`SuggestModal`) and go-to-next/previous - each jumping to the offending key. Import-free `src/report-filter.ts`.
+- **Report context menu, finding grouping, render caps**: right-click a finding for Copy message / Open / Fix this finding / Silence this note; a file's findings group under their top-level key when they span several; the panel caps at 300 files and 100 findings/file with a "use the filter" hint.
+- **Ribbon icon** to open the report, and the last scan is retained so reopening restores it without a rescan.
+- **Read-only public API** at `app.plugins.plugins["lokf-enforcer"].api`: `getReport()`, `validatePath(path)` (read-only), and `onValidated(cb)`. A dependency-free `src/public-api.ts` with its own stable `LokfFinding` shape - offered, never required.
+- **Field aliasing** (Settings → Field aliasing (advanced), off): `user=canonical` pairs (e.g. `depends_on=dependsOn`) rename a vault's own keys onto the LOKF ones before validation, so a non-canonical vault can still be checked. Applied at the parse boundary (validation, graph, and autocomplete all see canonical keys); copy-on-write. (`applyFieldAliases`.)
+- **Node-tested throughout**: the locator, vocabulary manifest, concept graph, §5 shape checks, autocomplete context, safe fixes, body-link promotion, per-note opt-out, severity escalation, report filter, finding grouping, and field aliasing all carry smoke-test coverage.
+
+### Changed
+
+- **Severity icons in the report** via `setIcon` (a triangle for a warning, a circle for an error) instead of the spelled-out word, with the severity still on an `aria-label`.
+- **Keyboard-operable collapse/expand** in the report: folder headers and per-file carets carry `role="button"`, `aria-expanded`, Enter/Space, and a focus ring.
+- **Aligned three rules with upstream LOKF PR [#69](https://github.com/nicholsn/lokf/pull/69)**: a `base_iri` may end in `#` as well as `/`; the `verified`/`generated` `by` actor check matches the schema's exact pattern (stricter than a source's `author`); `http_method` is no longer a recommended-field warning on a `Service`.
+- `@codemirror/state`/`@codemirror/view` are devDependencies (types only; external at runtime).
+- `tsconfig.json` enables `resolveJsonModule` for the bundled vocabulary manifest.
 
 ## [0.3.0] - 2026-09-11
 

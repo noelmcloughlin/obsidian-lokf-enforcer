@@ -1,0 +1,143 @@
+{
+  "schemaVersion": "0.7.0",
+  "generatedFrom": "lokf.yaml",
+  "classes": [
+    {
+      "name": "Dataset"
+    },
+    {
+      "name": "Table"
+    },
+    {
+      "name": "Metric"
+    },
+    {
+      "name": "Service"
+    },
+    {
+      "name": "Playbook",
+      "aliases": [
+        "runbook",
+        "how-to guide"
+      ]
+    },
+    {
+      "name": "Tutorial",
+      "aliases": [
+        "lesson",
+        "getting started guide"
+      ]
+    },
+    {
+      "name": "Explanation",
+      "aliases": [
+        "discussion",
+        "background",
+        "conceptual guide",
+        "topics"
+      ]
+    },
+    {
+      "name": "Policy"
+    },
+    {
+      "name": "GlossaryTerm"
+    },
+    {
+      "name": "Reference"
+    },
+    {
+      "name": "Document"
+    },
+    {
+      "name": "Role"
+    },
+    {
+      "name": "AttestedComputation",
+      "aliases": [
+        "Attested Computation"
+      ]
+    },
+    {
+      "name": "Person"
+    },
+    {
+      "name": "Organization"
+    }
+  ],
+  "relationTypes": [
+    "isPartOf",
+    "hasPart",
+    "references",
+    "dependsOn",
+    "derivedFrom",
+    "about",
+    "sameAs",
+    "relatedTo",
+    "wasAttributedTo",
+    "definedBy",
+    "measures",
+    "joinsWith",
+    "source",
+    "memberOf",
+    "holder"
+  ],
+  "genres": [
+    {
+      "value": "tutorial",
+      "aliases": [
+        "lesson",
+        "getting started"
+      ],
+      "notes": "Answers \"Can you teach me to…?\" - reader is *studying* by *doing*. Choose over how-to when the reader is a novice and the aim is learning, not a specific task. A tutorial is not the place for explanation - link an Explanation instead."
+    },
+    {
+      "value": "how-to",
+      "aliases": [
+        "guide",
+        "recipe",
+        "runbook"
+      ],
+      "notes": "Answers \"How do I…?\" - reader is *working* by *doing*. A recipe, not a lesson; it assumes competence and solves one real-world problem."
+    },
+    {
+      "value": "reference",
+      "aliases": [
+        "specification",
+        "technical description"
+      ],
+      "notes": "Answers \"What is…?\" - reader is *working* by *thinking*, consulting facts rather than performing steps - describe and only describe, no teaching or opinion."
+    },
+    {
+      "value": "explanation",
+      "aliases": [
+        "discussion",
+        "background",
+        "conceptual guide",
+        "topics"
+      ],
+      "notes": "Answers \"Why…?\" / \"Can you tell me about…?\" - reader is *studying* by *thinking*. The mode you can read away from the keyboard, and the place for alternatives, counter-examples, and context."
+    }
+  ],
+  "fieldTypes": [
+    "string",
+    "integer",
+    "number",
+    "boolean",
+    "date",
+    "datetime",
+    "time",
+    "uri",
+    "json"
+  ],
+  "conceptStatuses": [
+    "draft",
+    "stable",
+    "deprecated"
+  ],
+  "subsets": [
+    "okf_core",
+    "lokf_semantic",
+    "okf_v02"
+  ]
+}

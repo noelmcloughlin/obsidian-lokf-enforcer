@@ -29,7 +29,7 @@ Those labels are computed from the frontmatter on every read, never stored, so t
 
 Open a vault that has an `index.md` at its root (or at the [bundle root you configure](#usage)), and a status-bar item appears: **LOKF ✓** when everything checks out, **LOKF ⚠ 3** for warnings, **LOKF ✖ 1** the moment something is structurally wrong - a malformed web address where the bundle's `base_iri` should be, a relationship that points nowhere.
 
-Click it, or run **Validate vault** from the command palette, and a side panel opens: notes grouped by folder, the one you're editing pinned at the top, each finding named in plain language with the file one click away. Nothing is ever silently rejected - see [Philosophy](#philosophy-warnings-not-errors-almost-everywhere).
+Click it, or run **Validate vault** from the command palette, and a side panel opens: notes grouped by folder, the one you're editing pinned at the top, each finding named in plain language with the file one click away. A filter box narrows the list as you type (`sev:error`, `rule:lokf/2`, or any text), and a **Go to a finding** quick-switcher (plus next/previous-finding commands) jumps straight to the offending line. Right-clicking a finding offers to copy its message, open it, apply its one safe fix, or silence the whole note; when a file's findings span several frontmatter keys they group under each. Nothing is ever silently rejected - see [Philosophy](#philosophy-warnings-not-errors-almost-everywhere).
 
 ## Install
 
@@ -61,6 +61,12 @@ Open the command palette and search for **LOKF**:
 | Validate vault (full LOKF report) | Scan everything and open the report panel |
 | Validate active note | Check the current note |
 | Insert semantic header template into root index.md | Adds a starter header, only if the root `index.md` has no frontmatter at all |
+| Find a concept (by name, type, or relations) | Keyboard-first quick-switcher over every concept in the bundle |
+| Find an orphan concept (nothing links to it) | Lists the concepts nothing else links to |
+| Go to a finding (search all findings) | Keyboard-first quick-switcher over every finding; opens the note on the offending line |
+| Go to next / previous finding | Cycle through the report's findings, jumping to each |
+| Fix safe issues in the active note | Applies the deterministic fixes (see [Philosophy](#philosophy-warnings-not-errors-almost-everywhere)) in one undo step |
+| Promote body links to typed relations… | Guesses a typed relation for each body link and lets you confirm which to add |
 
 Clicking the status-bar item validates the active note, or runs a vault scan if none is open.
 
@@ -68,12 +74,16 @@ Clicking the status-bar item validates the active note, or runs a vault scan if 
 
 Configure under **Settings → LOKF Enforcer**. Every setting is registered declaratively, so it is reachable from Obsidian's settings search as well as the tab itself.
 
+- **This device** - a device-local switch that silences the plugin (status bar, inline underlines, autocomplete, and scanning) on this device only. It's stored per-device and never synced, so a vault synced to a phone can turn it off there while the desktop keeps working.
 - **Sibling plugin** - a shortcut that opens OKF Enforcer in Obsidian's community-plugin browser (you install and enable it yourself - this plugin never installs, enables, or calls into another plugin, and has no way to detect whether one is already installed), and a toggle for the one-time "install an OKF validator" notice shown on first opening a vault.
 - **Type vocabulary** - the known LOKF classes, whether an unrecognized `type` is worth a warning (never an error), and the accepted `genre` values.
 - **Type-specific fields** - toggle the recommended-field warnings for `Metric`/`Service`/`GlossaryTerm` concepts.
 - **Semantic header & base_iri** - the authority denylist (domains a `base_iri` must not live inside), the placeholder-domain list (treated as "pending", not a violation), and whether a missing header is worth a warning at all.
 - **Relationships** - whether to check that a relationship target inside this bundle resolves to a real file (both full IRIs under `base_iri` and bare relative paths are checked; external IRIs never are). A broken link is always a warning, never an error - LOKF is deliberately permissive about cross-links. Also an off-by-default check of `relations[].predicate` against a configurable list, since the full RelationType vocabulary lives in the LOKF schema.
-- **Scope & performance** - the [bundle root folders](#usage) for a vault holding several independent bundles as project folders, excluded folders, and the batch size used for large vaults.
+- **Trust & lifecycle (OKF v0.2 §5)** - whether to validate the *shape* of the `verified`/`generated` provenance, `status`, `stale_after`, and `sources` fields a bundle uses (never their credibility *depth*), plus the accepted `status` values. Nothing fires on a bundle that carries no §5 fields.
+- **Rule severity** - a list of rule ids whose warnings you want raised to errors (for a team that wants stricter gating). Escalation only: a finding that is already an error by default is never downgraded, so this can only make the check stricter, never invert the "warnings, not errors" contract.
+- **Field aliasing (advanced)** - `user=canonical` pairs (e.g. `depends_on=dependsOn`) that rename a vault's own frontmatter keys onto the LOKF ones before checking, so a vault that never adopted the canonical spellings can still be validated. Off by default, because turning it on stops the plugin flagging the divergence - use it only when the alternative spelling is deliberate.
+- **Scope & performance** - the [bundle root folders](#usage) for a vault holding several independent bundles as project folders, excluded folders, a **per-note opt-out key** (a note with `lokf: ignore` in its frontmatter is silenced - no findings, underlines, or report rows - while still counting as a concept in the bundle graph), and the batch size used for large vaults.
 
 ## For the curious: how the checking works
 
@@ -86,15 +96,16 @@ The sections above are everything you need to use the plugin. What follows is th
 [LOKF](https://lokf.nolan-nichols.com/specification/) is that same folder, held to a stricter, more precise dialect: every field and relationship is bound to a public vocabulary (schema.org / DCAT / PROV-O), so the bundle can be losslessly turned into a knowledge graph and queried like a database. That precision is what this plugin checks for:
 
 - A **bundle-root semantic header** on the root `index.md` - `lokf_version`, `base_iri`, `context`, `title`, `description`, `license`, `publisher` - the keys that lift the whole bundle into a graph.
-- **`base_iri` authority and format checks** - it must be a valid, trailing-slash web address, and one the project actually owns (not, say, `https://github.com/<org>/<repo>/knowledge/...`).
+- **`base_iri` authority and format checks** - it must be a valid absolute web address, terminated with `/` or `#` (so ids mint by plain concatenation), and one the project actually owns (not, say, `https://github.com/<org>/<repo>/knowledge/...`).
 - A **controlled type vocabulary** (`Dataset`, `Table`, `Metric`, `Service`, `Playbook`, `Tutorial`, `Explanation`, `Policy`, `GlossaryTerm`, `Reference`, `Document`, `Person`, `Organization`, `AttestedComputation`) with type-specific fields - e.g. `Table`/`Dataset` need structured `fields`/`distribution` objects, never bare strings or URLs.
 - The optional Diátaxis **`genre`** facet (`tutorial` / `how-to` / `reference` / `explanation`).
 - **Typed relationships** in place of bare links - `isPartOf`, `hasPart`, `references`, `dependsOn`, `derivedFrom`, `about`, `sameAs`, `relatedTo`, `definedBy`, `source`, plus a generic `relations` list - each with a precise meaning, and checked to make sure the note it points at actually exists.
 - **`id` consistency** - does a concept's `id` match what its `base_iri` and file path would produce?
+- **Trust/lifecycle field shapes (OKF v0.2 §5)** - when a bundle uses them, that `verified`/`generated` events are well-formed `{ by, at }` with an OKF §7 actor (`human:<id>`, `process:<id>`, or `<producer>/<version>`), `status` is one of the schema's lifecycle values, `stale_after` is a date, and each `sources` entry names its `resource`. These fields originate in OKF but are defined in the LOKF schema and are the substrate LOKF's curation ceremony stands on, so their *shape* is checked here (never their credibility *depth* or trust-tier display).
 
 ### What this plugin deliberately does *not* check
 
-Required `type`, `generated`/`verified` provenance and trust, `status`/`stale_after` lifecycle, `Attested Computation` shape, and `index.md`/`log.md` structure are all **OKF v0.2 rules**, not LOKF-specific ones - and a plugin like **OKF Enforcer** already checks them well. Duplicating that logic here would mean maintaining two copies of the same rules in two repos. Instead, LOKF Enforcer offers a shortcut (*Settings → Sibling plugin*) to Obsidian's community-plugin browser, and a one-time notice on first opening a vault, both recommending an OKF v0.2 validator - it never requires, loads, or calls into that other plugin's code, and it keeps working (just with narrower coverage) if you don't install one.
+Required `type`, `Attested Computation` shape, `index.md`/`log.md` structure and generation, and v0.1→v0.2 migration are **OKF v0.2 rules**, not LOKF-specific ones - and a plugin like **OKF Enforcer** already checks them well. The same goes for the *depth* of the §5 trust/lifecycle fields (credibility signals and trust-tier display): LOKF Enforcer validates their *shape* (see above), but leaves their interpretation to an OKF validator. Duplicating the rest here would mean maintaining two copies of the same rules in two repos. Instead, LOKF Enforcer offers a shortcut (*Settings → Sibling plugin*) to Obsidian's community-plugin browser, and a one-time notice on first opening a vault, both recommending an OKF v0.2 validator - it never requires, loads, or calls into that other plugin's code, and it keeps working (just with narrower coverage) if you don't install one.
 
 ### Where this fits: the "Schema-valid" tier
 
@@ -104,13 +115,23 @@ The companion [lokf-agent-skills](https://github.com/noelmcloughlin/lokf-agent-s
 
 ### Philosophy: warnings, not errors, almost everywhere
 
-LOKF's own rules stay permissive by design: missing optional fields, an unknown `type`, and broken cross-links must never cause rejection. This plugin reserves **errors** for genuinely structural problems - a `base_iri` that isn't a valid address, doesn't end in `/`, or lives somewhere the project doesn't own; a `Field`/`Distribution` given as a bare string instead of a structured object. Everything else - an unrecognized type, a missing recommended field, an unresolved relative link, an `id` that doesn't match what it should mint - is a warning you can act on or ignore.
+LOKF's own rules stay permissive by design: missing optional fields, an unknown `type`, and broken cross-links must never cause rejection. This plugin reserves **errors** for genuinely structural problems - a `base_iri` that isn't a valid address, doesn't end in `/` or `#`, or lives somewhere the project doesn't own; a `Field`/`Distribution` given as a bare string instead of a structured object. Everything else - an unrecognized type, a missing recommended field, an unresolved relative link, an `id` that doesn't match what it should mint - is a warning you can act on or ignore.
 
-There's no auto-fix: nothing here has a safe, unambiguous machine-guessable value (you can't auto-pick a `base_iri` - that's a human domain-ownership decision).
+Auto-fix is offered only where the correction is mechanical and unambiguous. The **Fix safe issues in the active note** command appends a missing `base_iri` terminator (`/`), rewrites a known type alias to its canonical class (`runbook` → `Playbook`), and turns a bare-string relation into a one-item list - each a format-preserving edit, in one undo step. It never guesses a value the project owns: it will not pick a `base_iri`, move one into a namespace you control, or invent a publisher identity - those stay human decisions, flagged but not touched.
 
 ## Privacy
 
-This plugin makes **no network requests** and has no telemetry, analytics, or external services of any kind. It reads Markdown files in the open vault, writes only when you explicitly run the semantic-header command, and stores its settings in the vault's own plugin data. Nothing leaves your machine.
+This plugin makes **no network requests** and has no telemetry, analytics, or external services of any kind. It reads Markdown files in the open vault, writes only when you explicitly ask it to edit frontmatter (the semantic-header and promote-body-links commands, and the report's *Fix this finding* / *Silence this note* actions), and stores its settings in the vault's own plugin data. Nothing leaves your machine.
+
+## For other plugins: a read-only API
+
+A sibling plugin or agent (for example LOKF Curator) can read validation state without either plugin depending on the other, at `app.plugins.plugins["lokf-enforcer"].api`:
+
+- `getReport()` - the latest vault scan's findings (a read-only snapshot).
+- `validatePath(path)` - validate one note on demand; reads and validates only, never writes.
+- `onValidated(callback)` - fires when a full scan or an incremental re-check finishes; returns an unsubscribe function.
+
+The API is **offered, never required** - it writes nothing, and its `LokfFinding` shape is a stable contract (`src/public-api.ts`) independent of the plugin's internals.
 
 ## Development
 
