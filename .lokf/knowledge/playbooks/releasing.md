@@ -3,7 +3,7 @@ type: Playbook
 id: https://lokf-enforcer.example/knowledge/playbooks/releasing
 title: Releasing
 description: PR-based version-bump flow, then a tag push that triggers the hardened GitHub Actions release workflow.
-resource: PUBLISHING.md
+resource: CONTRIBUTING.md
 dependsOn:
   - https://lokf-enforcer.example/knowledge/references/obsidian-plugin-guidelines
 generated:
@@ -11,7 +11,7 @@ generated:
   at: "2026-09-08T00:00:00Z"
 verified:
   - by: process:lokf-librarian
-    at: "2026-09-09T00:00:00Z"
+    at: "2026-09-11T00:00:00Z"
 ---
 
 # Overview

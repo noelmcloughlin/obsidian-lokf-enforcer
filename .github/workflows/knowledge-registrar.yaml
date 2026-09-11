@@ -1,0 +1,49 @@
+name: Knowledge Registrar
+
+# The registrar's job: keep the LOKF knowledge bundle's records well-formed and
+# provenanced - never judge whether their content is true, that's the curator's
+# job. Validates the bundle whenever it (or its tooling) changes, and on a
+# weekly schedule.
+on:
+  pull_request:
+    paths:
+      - ".lokf/**"
+      - ".github/workflows/knowledge-registrar.yaml"
+  schedule:
+    - cron: "0 6 * * 1" # Mondays at 06:00 UTC
+  workflow_dispatch:
+
+# Cancel superseded runs on the same ref to save runner time.
+concurrency:
+  group: knowledge-registrar-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    name: Validate the LOKF bundle
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Harden the runner
+        uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
+        with:
+          egress-policy: audit
+
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
+        with:
+          python-version: "3.12"
+
+      - name: Install the lokf sidecar
+        run: uv sync
+        working-directory: .lokf
+
+      - name: Validate the knowledge bundle
+        run: uv run lokf validate knowledge
+        working-directory: .lokf

@@ -1,0 +1,40 @@
+version: 2
+updates:
+  # Keeps this repository's OWN workflows (.github/workflows/*.yml|*.yaml)
+  # current - it understands the `@<sha> # v1.2.3` pin convention used
+  # throughout and opens a PR bumping both when a pinned action releases.
+  # Every workflow here pins to a commit SHA, which is exactly the convention
+  # that goes stale silently: actionlint catches syntax drift, not staleness.
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    commit-message:
+      prefix: "chore(actions)"
+
+  # The plugin's own build/test toolchain (esbuild, TypeScript, ESLint and the
+  # obsidianmd plugin). All of it is devDependencies - nothing ships in the
+  # bundle esbuild produces - so an update here can only break the build or the
+  # lint gate, never a released main.js. Grouped so a routine week is one PR to
+  # review rather than six.
+  - package-ecosystem: "npm"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    commit-message:
+      prefix: "chore(deps)"
+    groups:
+      dev-dependencies:
+        dependency-type: "development"
+
+  # The .lokf/ sidecar's Python toolchain (the `lokf` package). Kept separate
+  # from the npm tree above: it maintains this repo's knowledge bundle and has
+  # nothing to do with the plugin build. A major bump here can require concept
+  # frontmatter changes, so these PRs want a human read, not a rubber stamp -
+  # see the lokf-librarian skill's own "check sidecar tooling versions" step.
+  - package-ecosystem: "uv"
+    directory: "/.lokf"
+    schedule:
+      interval: "weekly"
+    commit-message:
+      prefix: "chore(lokf)"

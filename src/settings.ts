@@ -6,7 +6,12 @@ import { App, PluginSettingTab } from "obsidian";
 import type { SettingDefinitionItem } from "obsidian";
 import type LokfPlugin from "./main";
 import type { LokfSettings } from "./validator";
-import { joinCsv, parseCsv } from "./validator";
+import { joinCsv, parseCsv, hiddenRootSegment } from "./validator";
+
+/** Obsidian's own deep link into the community-plugin browser. Opening it is
+ *  the most this plugin ever does about its sibling: the user installs and
+ *  enables it themselves, exactly as they would any other plugin. */
+const OKF_ENFORCER_URI = "obsidian://show-plugin?id=okf-enforcer";
 
 type SettingKey = keyof LokfSettings;
 
@@ -19,6 +24,7 @@ const CSV_KEYS = new Set<SettingKey>([
   "authorityDenylist",
   "placeholderDomains",
   "excludeFolders",
+  "bundleRoots",
 ]);
 
 function isCsvKey(key: string): key is SettingKey {
@@ -45,8 +51,12 @@ export class LokfSettingTab extends PluginSettingTab {
    *  the settings. */
   async setControlValue(key: string, value: unknown): Promise<void> {
     const settings = this.plugin.settings as unknown as Record<string, unknown>;
-    settings[key] = isCsvKey(key) ? parseCsv(String(value)) : value;
+    if (isCsvKey(key)) settings[key] = parseCsv(String(value));
+    else settings[key] = value;
     await this.plugin.saveSettings();
+    // A cached base_iri may belong to a root that no longer exists in this
+    // shape once the set of bundle roots changes.
+    if (key === "bundleRoots") this.plugin.invalidateBaseIriCache();
     // A toggle can gate another row (see "Known predicates"), and a `disabled`
     // predicate is only re-evaluated when asked. This is the CSS-only refresh,
     // not a re-render, so it is cheap enough to run on every change.
@@ -60,19 +70,20 @@ export class LokfSettingTab extends PluginSettingTab {
         heading: "Sibling plugin",
         items: [
           {
-            name: "OKF validator status",
-            desc: this.plugin.siblingStatusText(),
-            aliases: ["OKF Enforcer", "companion", "detection"],
-            // Re-running detection changes this row's own description, so the
-            // tab is rebuilt from fresh definitions rather than patched.
+            // There is no public API for "is plugin X installed" (reading
+            // `app.plugins` is undocumented and flagged in community review),
+            // so this is offered unconditionally rather than only when
+            // "not detected".
+            name: "Install OKF Enforcer",
+            desc: "Opens OKF Enforcer in Obsidian's community-plugin browser, where you install and enable it yourself. LOKF Enforcer never installs, enables, or calls into another plugin.",
+            aliases: ["sibling", "companion", "OKF v0.2"],
             action: () => {
-              this.plugin.checkSiblingPlugin(true);
-              this.update();
+              window.open(OKF_ENFORCER_URI);
             },
           },
           {
             name: "Recommend installing an OKF validator",
-            desc: "Show a one-time notice if no OKF v0.2 validator plugin is detected.",
+            desc: "Show a one-time notice, on first opening this vault, recommending an OKF v0.2 validator (e.g. OKF Enforcer).",
             control: { type: "toggle", key: "recommendSiblingPlugin" },
           },
         ],
@@ -161,6 +172,28 @@ export class LokfSettingTab extends PluginSettingTab {
         type: "group",
         heading: "Scope and performance",
         items: [
+          {
+            name: "Bundle root folders",
+            desc: "Comma-separated vault-relative folders, each the root of its own bundle (its own index.md, base_iri, ids). Leave blank if the bundle is the whole vault - the usual Obsidian setup, one vault per bundle. List folders here only when one vault holds several independent bundles as sibling project folders; a note outside every listed folder is not scanned.",
+            aliases: ["subfolder", "one vault many folders", "bundleRoots", "multiple bundles"],
+            control: {
+              type: "textarea",
+              key: "bundleRoots",
+              rows: 2,
+              // A dot-folder entry is silently unscannable rather than wrong-
+              // looking (Obsidian's file index never exposes one), so it is
+              // rejected here with the reason, before it is ever saved.
+              validate: (value) => {
+                for (const entry of parseCsv(String(value ?? ""))) {
+                  const segment = hiddenRootSegment(entry);
+                  if (segment) {
+                    return `"${entry}" sits inside "${segment}" - Obsidian's file index skips folders whose name begins with a dot, so nothing under it can ever be scanned. Open that folder as its own vault instead (File → Open folder as vault).`;
+                  }
+                }
+                return undefined;
+              },
+            },
+          },
           {
             name: "Excluded folders",
             desc: "Comma-separated folder paths to skip during a scan.",

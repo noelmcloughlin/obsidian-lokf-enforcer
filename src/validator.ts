@@ -29,6 +29,14 @@ export interface LokfSettings {
   excludeFolders: string[];
   batchSize: number;
   recommendSiblingPlugin: boolean;
+  /** Vault-relative folders, each the root (index.md, own base_iri/ids) of its
+   *  own bundle. Empty means the whole vault is one implicit bundle - the
+   *  usual Obsidian setup. Non-empty lets one vault hold several independent
+   *  bundles as sibling project folders - the Obsidian-native "one vault,
+   *  many folders" pattern - rather than forcing a `.lokf/knowledge/`-style
+   *  bundle to be opened as its own vault. A note outside every configured
+   *  root is not scanned. */
+  bundleRoots: string[];
 }
 
 export const KNOWN_LOKF_TYPES = [
@@ -97,7 +105,96 @@ export const DEFAULT_SETTINGS: LokfSettings = {
   excludeFolders: [],
   batchSize: 50,
   recommendSiblingPlugin: true,
+  bundleRoots: [],
 };
+
+/** Settles the spellings a person plausibly types for one folder onto the
+ *  single form Obsidian's vault paths use: forward slashes, no leading or
+ *  trailing slash or whitespace, no doubled slashes, no `./` segments. So
+ *  "/knowledge/", " knowledge ", ".\knowledge", "./knowledge" and
+ *  "knowledge" all become "knowledge". (`..` is left alone - it can't name a
+ *  vault folder, so it falls through to the missing-root check and is
+ *  reported as not existing, which is the honest message for it.) */
+export function normalizeBundleRoot(value: string): string {
+  return value
+    .replace(/\\/g, "/")
+    .split("/")
+    .map((segment) => segment.trim())
+    .filter((segment) => segment !== "" && segment !== ".")
+    .join("/");
+}
+
+/**
+ * The first path segment beginning with a dot, or null if there is none.
+ *
+ * Obsidian's file index never lists a folder whose name starts with a dot, so
+ * a bundle root inside one (`.lokf/knowledge`, the sidecar convention) is
+ * invisible to this and every other plugin - a scan of it would silently find
+ * nothing. Callers report the segment rather than scanning into the void.
+ */
+export function hiddenRootSegment(bundleRoot: string): string | null {
+  const root = normalizeBundleRoot(bundleRoot);
+  if (!root) return null;
+  return root.split("/").find((segment) => segment.startsWith(".")) ?? null;
+}
+
+// ---- Multi-bundle-root resolution ----
+//
+// A vault may configure several bundle roots (one vault, several sibling
+// project folders, each its own bundle) or none (the whole vault is the one
+// implicit bundle). This is pure path algebra - no Obsidian dependency - so
+// it lives here rather than in main.ts, exactly like the rest of this file.
+
+/** Normalizes and deduplicates a list of configured bundle roots, sorted
+ *  longest-first so `resolveBundleRoot`'s first prefix match is always the
+ *  most specific one for a path under a nested root. A blank entry (after
+ *  normalizing) drops out silently - it would otherwise collide with the "no
+ *  roots configured" case, which means something different (the whole vault,
+ *  rather than one configured root that happens to be the vault root). */
+export function normalizeBundleRoots(roots: string[]): string[] {
+  const seen = new Set<string>();
+  for (const entry of roots) {
+    const norm = normalizeBundleRoot(entry);
+    if (norm) seen.add(norm);
+  }
+  return [...seen].sort((a, b) => b.length - a.length);
+}
+
+/**
+ * Which configured bundle a vault-relative path belongs to.
+ *
+ * Returns that bundle's root path; `""` for the implicit whole-vault bundle
+ * when `roots` is empty (no explicit roots configured); or `null` when
+ * explicit roots are configured and the path sits under none of them - it
+ * belongs to no bundle and is not scanned at all.
+ *
+ * `roots` must already be normalized and sorted longest-first (see
+ * `normalizeBundleRoots`) - this function does not sort, so it stays cheap to
+ * call once per candidate file during a scan.
+ */
+export function resolveBundleRoot(vaultPath: string, roots: string[]): string | null {
+  if (roots.length === 0) return "";
+  for (const root of roots) {
+    if (vaultPath === root || vaultPath.startsWith(root + "/")) return root;
+  }
+  return null;
+}
+
+export function bundleRootIndexPath(root: string): string {
+  return root ? `${root}/index.md` : "index.md";
+}
+
+/** Strips `root`'s prefix so validator.ts's rule functions - which know
+ *  nothing about bundle roots - always see paths relative to the bundle
+ *  being validated, exactly as when a bundle root was necessarily the vault
+ *  root. The inverse of `toVaultPath`. */
+export function toBundlePath(vaultPath: string, root: string): string {
+  return root && vaultPath.startsWith(root + "/") ? vaultPath.slice(root.length + 1) : vaultPath;
+}
+
+export function toVaultPath(bundlePath: string, root: string): string {
+  return root ? `${root}/${bundlePath}` : bundlePath;
+}
 
 const FM_RE = /^---\r?\n([\s\S]*?)\r?\n---/;
 const SCHEME_RE = /^[a-z][a-z0-9+.-]*:/i;
@@ -109,9 +206,28 @@ export function isReserved(path: string): "index" | "log" | null {
   return null;
 }
 
+// isExcluded runs once per candidate file per scan, so the normalized folder
+// list is cached rather than rebuilt per call - same WeakMap-on-array-identity
+// convention as isKnownType above, sound for the same reason (settings.ts
+// assigns a fresh parseCsv() array on every edit, never mutates in place).
+const normalizedExcludeLists = new WeakMap<string[], string[]>();
+
+function normalizedExcludeFolders(excludeFolders: string[]): string[] {
+  let norm = normalizedExcludeLists.get(excludeFolders);
+  if (!norm) {
+    norm = excludeFolders.map(normalizeBundleRoot).filter(Boolean);
+    normalizedExcludeLists.set(excludeFolders, norm);
+  }
+  return norm;
+}
+
+/** Settles the same spellings normalizeBundleRoot does ("notes/", "/notes",
+ *  " notes ", "./notes") onto the single form vault paths use, so a folder
+ *  typed with a trailing slash - the natural way to write one - isn't
+ *  silently never excluded. */
 export function isExcluded(path: string, settings: LokfSettings): boolean {
-  return settings.excludeFolders.some(
-    (folder) => folder && (path === folder || path.startsWith(folder + "/"))
+  return normalizedExcludeFolders(settings.excludeFolders).some(
+    (folder) => path === folder || path.startsWith(folder + "/")
   );
 }
 
@@ -175,10 +291,22 @@ function normalizeTypeKey(type: string): string {
   return type.trim().replace(/\s+/g, "").toLowerCase();
 }
 
+// isKnownType runs once per note, so the normalized vocabulary is cached
+// rather than rebuilt per call. Keyed by array identity, which is sound only
+// because a settings list is always REPLACED, never mutated in place
+// (settings.ts assigns a fresh parseCsv() array on every edit) - an in-place
+// push here would leave this cache stale.
+const normalizedTypeSets = new WeakMap<string[], Set<string>>();
+
 function isKnownType(type: string, knownTypes: string[]): boolean {
   const key = normalizeTypeKey(type);
   if (!key) return false;
-  return knownTypes.some((t) => normalizeTypeKey(t) === key);
+  let set = normalizedTypeSets.get(knownTypes);
+  if (!set) {
+    set = new Set(knownTypes.map(normalizeTypeKey));
+    normalizedTypeSets.set(knownTypes, set);
+  }
+  return set.has(key);
 }
 
 function hasScheme(s: string): boolean {
@@ -192,16 +320,16 @@ function matchesDomainList(host: string, list: string[]): boolean {
   });
 }
 
-/** Raised for a vault with no bundle-root index.md at all - there is no file to
- *  hang the missing-header finding on, so the caller synthesizes one. */
-export function missingRootIndexIssues(settings: LokfSettings): LokfIssue[] {
+/** Raised for a bundle with no root index.md at all - there is no file to hang
+ *  the missing-header finding on, so the caller synthesizes one. The path is
+ *  passed in because the bundle root need not be the vault root. */
+export function missingRootIndexIssues(settings: LokfSettings, rootIndexPath = "index.md"): LokfIssue[] {
   if (!settings.warnMissingHeader) return [];
   return [
     {
       severity: "warning",
       rule: "lokf/2-header",
-      message:
-        "This vault has no root index.md, so it declares no LOKF semantic header (lokf_version, base_iri, context, …) and no concept ids can be minted or checked.",
+      message: `There is no ${rootIndexPath}, so this bundle declares no LOKF semantic header (lokf_version, base_iri, context, …) and no concept ids can be minted or checked.`,
     },
   ];
 }
@@ -265,7 +393,10 @@ export function validateRootHeader(
           message: `base_iri "${baseIri}" must end with "/" - concept ids are minted by straight concatenation.`,
         });
       }
-      const host = url.host.toLowerCase();
+      // .hostname, not .host: the latter includes ":port", which would let
+      // "https://github.com:8080/..." slip past a denylist entry of
+      // "github.com" - the same authority, just on a non-default port.
+      const host = url.hostname.toLowerCase();
       if (matchesDomainList(host, settings.authorityDenylist)) {
         issues.push({
           severity: "error",
@@ -394,8 +525,23 @@ function validateFieldsAndDistribution(data: Record<string, unknown>): LokfIssue
 export function validateTypeVocabulary(data: Record<string, unknown>, settings: LokfSettings): LokfIssue[] {
   const issues: LokfIssue[] = [];
   const typeRaw = data["type"];
-  const type = typeof typeRaw === "string" ? typeRaw.trim() : "";
-  if (!type) return issues; // missing type is the installed OKF validator's error to raise
+  // undefined/null is effectively missing - the installed OKF validator's
+  // error to raise, not this one's. A list or mapping is a genuine shape
+  // mistake (unlike a coercible scalar - "123" or "true" - which falls
+  // through to the ordinary "not one of the vocabulary" warning below,
+  // exactly like an unrecognized string would).
+  if (typeRaw === undefined || typeRaw === null) return issues;
+  const typeScalar = asScalar(typeRaw);
+  if (typeScalar === null) {
+    issues.push({
+      severity: "warning",
+      rule: "lokf/3-vocab",
+      message: `type ${describeValue(typeRaw)} should be a single string naming a LOKF class, not a list or mapping.`,
+    });
+    return issues;
+  }
+  const type = typeScalar.trim();
+  if (!type) return issues; // blank string is effectively missing too
 
   if (settings.warnUnknownType && !isKnownType(type, settings.knownTypes)) {
     issues.push({
@@ -511,11 +657,26 @@ export function validateRelationships(
 ): LokfIssue[] {
   const issues: LokfIssue[] = [];
 
-  const checkTargets = (field: string, raw: unknown) => {
+  // `mustBeList` applies only to the ten named RELATION_FIELDS below, never to
+  // a single relations[].target: the generated schema declares those ten
+  // slots multivalued (Rule 4), so a bare scalar there - natural to write,
+  // and semantically a single target either way - fails real `lokf validate`
+  // even though this function would happily resolve it. A real audit of this
+  // bundle found exactly this mistake in roughly half its concepts (see
+  // .lokf/knowledge/log.md, 2026-09-09) - `lokf validate` is the only thing
+  // that ever caught it before this warning existed.
+  const checkTargets = (field: string, raw: unknown, mustBeList = false) => {
     if (raw === undefined) return;
     if (typeof raw !== "string" && !Array.isArray(raw)) {
       issues.push({ severity: "warning", rule: "lokf/4-relations", message: `${field} should be a string or a list of strings.` });
       return;
+    }
+    if (mustBeList && !Array.isArray(raw)) {
+      issues.push({
+        severity: "warning",
+        rule: "lokf/4-relations",
+        message: `${field} is a single value, but the LOKF schema requires a list even for one target - write "${field}:" on its own line with "- ${raw}" indented below it.`,
+      });
     }
     const values = Array.isArray(raw) ? raw : [raw];
     for (const v of values) {
@@ -541,7 +702,7 @@ export function validateRelationships(
   };
 
   for (const field of RELATION_FIELDS) {
-    checkTargets(field, data[field]);
+    checkTargets(field, data[field], true);
   }
 
   const relations = data["relations"];

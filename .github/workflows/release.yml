@@ -32,7 +32,7 @@ jobs:
                   egress-policy: audit
 
             - name: Check out the tagged commit
-              uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+              uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
               with:
                   persist-credentials: false
 
@@ -41,17 +41,22 @@ jobs:
             # no partial match. Catch a mistagged push (e.g. `v0.2.0` instead of
             # `0.2.0`) here, before spending a build + attestation on a release
             # Obsidian's installer would never find.
+            # The tag reaches the shell through the environment, never through
+            # ${{ }} interpolation: a tag name is free-form text, and git permits
+            # `$`, backticks and quotes in one, so interpolating it directly into
+            # a run: block would let a pushed tag execute here.
             - name: Verify tag matches manifest version
+              env:
+                  TAG: ${{ github.ref_name }}
               run: |
-                  tag="${{ github.ref_name }}"
                   version="$(node -p "require('./manifest.json').version")"
-                  if [ "$tag" != "$version" ]; then
-                    echo "::error::Tag '$tag' does not match manifest.json version '$version'. Obsidian requires the release tag to equal the version exactly, with no leading 'v'. Delete this tag, then re-tag as '$version' (see CONTRIBUTING.md's release flow)."
+                  if [ "$TAG" != "$version" ]; then
+                    echo "::error::Tag '$TAG' does not match manifest.json version '$version'. Obsidian requires the release tag to equal the version exactly, with no leading 'v'. Delete this tag, then re-tag as '$version' (see CONTRIBUTING.md's release flow)."
                     exit 1
                   fi
 
             - name: Use Node.js
-              uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+              uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
               with:
                   node-version: 24
                   cache: 'npm'
@@ -76,10 +81,9 @@ jobs:
             - name: Create release
               env:
                   GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+                  TAG: ${{ github.ref_name }}
               run: |
-                    tag="${{ github.ref_name }}"
-
-                    gh release create "$tag" \
-                        --title="$tag" \
+                    gh release create "$TAG" \
+                        --title="$TAG" \
                         --draft \
                         main.js manifest.json ${{ steps.styles.outputs.exists == 'true' && 'styles.css' || '' }}

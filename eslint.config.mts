@@ -13,6 +13,9 @@ export default defineConfig(
 		'package.json',
 		'package-lock.json',
 		'tsconfig.json',
+		// The LOKF sidecar is a Python/uv project; nothing under it is plugin
+		// code, and its .venv ships vendored JS that is not ours to lint.
+		'.lokf',
 	]),
 	{
 		languageOptions: {
@@ -101,6 +104,7 @@ export default defineConfig(
 		},
 		rules: {
 			'obsidianmd/rule-custom-message': 'off',
+			'obsidianmd/no-nodejs-modules': 'off',
 		},
 	},
 );

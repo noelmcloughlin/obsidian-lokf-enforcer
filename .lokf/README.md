@@ -19,7 +19,7 @@ You write normal Markdown; you get a validated, queryable graph for free.
 
 ## What's in here
 
-```
+```text
 .lokf/
 |-- knowledge/            # the bundle - one Markdown file per concept
 |   |-- index.md          # bundle metadata + table of contents (reserved)
@@ -27,11 +27,12 @@ You write normal Markdown; you get a validated, queryable graph for free.
 |   |-- services/         # the plugin, validator engine, report view, settings tab
 |   |-- references/       # LOKF spec, OKF spec, Obsidian plugin guidelines, ...
 |   |-- glossary/         # LOKF, OKF, Diátaxis genre
-|   |-- playbooks/        # knowledge sources, contributing, releasing
+|   |-- playbooks/        # knowledge sources, contributing, releasing, quality gates
 |   |-- policies/         # no telemetry
 |   |-- explanation/      # why LOKF Enforcer is a layered add-on
 |-- pyproject.toml        # declares the `lokf` toolkit as a dependency
 |-- justfile              # convenience commands (below)
+|-- scripts/              # knowledge-librarian.sh, the scheduled-agent wrapper
 ```
 
 ## Prerequisites
@@ -66,6 +67,11 @@ uv run lokf convert knowledge --format ttl
 3. Link concepts with typed-relation keys whose values are target `id`s - e.g. `dependsOn:`, `about:`, `references:`, `isPartOf:`. Run `uv run lokf vocab` to list available relations.
 4. Add the concept to the table of contents in `knowledge/index.md`.
 5. Run `just lokf-validate` before committing.
+6. If a sentence uses a spaced dash ("X - Y") as punctuation, don't let
+   line-wrapping put the `-` at the start of a line - Markdown reads that as
+   a list item, tripping `lint-and-docs.yaml`'s `MD032` on a paragraph that
+   was never meant to be a list. Reword or rewrap so the dash stays
+   mid-line.
 
 ## Learn more
 

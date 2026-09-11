@@ -2,6 +2,6 @@
   "id": "lokf-enforcer",
   "name": "LOKF Enforcer",
   "author": "Noel McLoughlin",
-  "description": "Validate the LOKF (Linked Open Knowledge Format) semantic layer on top of OKF v0.2 in your vault.",
+  "description": "Catch broken note links, missing properties, invalid note types in your frontmatter as you write, so your vault stays a clean shared knowledge graph. Fills a Registrar role for Linked Open Knowledge Format (LOKF), a semantic OKF layer.",
   "repo": "noelmcloughlin/obsidian-lokf-enforcer"
 }

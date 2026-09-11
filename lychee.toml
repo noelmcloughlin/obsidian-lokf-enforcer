@@ -1,0 +1,8 @@
+exclude = [
+  # LOKF's published JSON-LD context; upstream's identifier, not this repo's,
+  # currently 404s. Drop once the w3id.org redirect is registered.
+  '^https://w3id\.org/lokf/context\.jsonld$',
+  # This repo's own placeholder base_iri (RFC 2606 reserved domain) - see
+  # FIXES.md F5. Drop once a real namespace is registered.
+  '^https://lokf-enforcer\.example/',
+]

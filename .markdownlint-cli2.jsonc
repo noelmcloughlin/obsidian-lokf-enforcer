@@ -1,0 +1,58 @@
+{
+  // Ignore generated local virtualenvs and other tool caches so the repo's
+  // markdown validation only sees source content, not runtime artifacts.
+  "ignores": [
+    "**/.venv/**",
+    ".lokf/.venv/**",
+    "**/node_modules/**",
+    // Agent skills are installed at run time, never committed (see
+    // CONTRIBUTING.md); they are upstream prose, not this repo's content.
+    "**/.agents/**",
+    "**/.claude/**"
+  ],
+  // Rules disabled for reasons specific to this repo's content, not because
+  // the underlying style guidance is wrong in general:
+  "config": {
+    // SKILL.md/references prose is deliberately unwrapped (agents and
+    // diff review don't benefit from a fixed 80-col wrap the way terminal
+    // output does).
+    "MD013": false,
+    // Every LOKF/OKF concept file's frontmatter carries a `title:` field
+    // that markdownlint treats as an implicit H1, so the body's own
+    // section headings (`# Services`, `# Overview`, ...) read as
+    // "duplicate" top-level headings. That frontmatter/body split is the
+    // format's actual convention (see lokf-librarian/SKILL.md Golden Rule
+    // 2 and any real `.lokf/knowledge/index.md`), not a mistake.
+    "MD025": false,
+    // Two adjacent `>` callouts (e.g. "> Sources:" / "> Model:" in the
+    // SKILL.md headers) separated by one blank line are intentionally two
+    // distinct blockquotes, not one blockquote with a gap.
+    "MD028": false,
+    // `<PROJ_NAME>`, `<BASE_IRI>`, `<TODAY>`, etc. are template
+    // placeholder tokens, not HTML.
+    "MD033": false,
+    // templates/readme-for-ai-agents.md is an insertable fragment (spliced
+    // into a host README after its intro, per lokf-scaffolding Step 2), so
+    // it starts at "## For AI Agents" by design - it is never meant to
+    // stand alone as its own top-level document.
+    "MD041": false,
+    // CHANGELOG.md follows Keep a Changelog: every release repeats the same
+    // Keep-a-Changelog category headings ("### Added", "### Changed", ...)
+    // under its own "## [x.y.z]" - expected structure, not a duplicate. The
+    // default (checking the whole document) flags that; siblings_only scopes
+    // the check to headings sharing the same parent, where a real duplicate
+    // still gets caught.
+    "MD024": {
+      "siblings_only": true
+    },
+    // Tables everywhere in this repo (and everywhere on GitHub) pair a
+    // padded header (`| Col |`) with a bare `|---|` separator row - the
+    // GFM convention, not a mistake. MD060 treats that pairing as
+    // internally inconsistent and wants the separator padded too
+    // (`| --- |`), which nobody writes by hand and no other renderer
+    // cares about. No `style` setting reconciles this: "padded"/"compact"
+    // just relocates which row it flags, and "consistent" is the
+    // default behavior that produced the mismatch in the first place.
+    "MD060": false
+  }
+}
