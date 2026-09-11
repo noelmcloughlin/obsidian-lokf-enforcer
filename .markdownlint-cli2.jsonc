@@ -44,6 +44,15 @@
     // still gets caught.
     "MD024": {
       "siblings_only": true
-    }
+    },
+    // Tables everywhere in this repo (and everywhere on GitHub) pair a
+    // padded header (`| Col |`) with a bare `|---|` separator row - the
+    // GFM convention, not a mistake. MD060 treats that pairing as
+    // internally inconsistent and wants the separator padded too
+    // (`| --- |`), which nobody writes by hand and no other renderer
+    // cares about. No `style` setting reconciles this: "padded"/"compact"
+    // just relocates which row it flags, and "consistent" is the
+    // default behavior that produced the mismatch in the first place.
+    "MD060": false
   }
 }

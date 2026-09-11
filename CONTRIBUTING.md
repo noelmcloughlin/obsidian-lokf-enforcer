@@ -21,33 +21,24 @@ To test in a real vault, clone into `<your-vault>/.obsidian/plugins/lokf-enforce
 
 ### Agent skills (optional - only for editing this repo's own `.lokf/` bundle)
 
-Nothing in the plugin depends on any agent skill, and no plugin user needs
-one. The skills below concern one thing only: this repository's own
-`.lokf/knowledge/` bundle, the documentation-about-this-repo that CI keeps
-in step with the source. Skip this section unless you are editing that.
+Nothing in the plugin depends on any agent skill, and no plugin user needs one. The skills below concern one thing only: this repository's own `.lokf/knowledge/` bundle, the documentation-about-this-repo that CI keeps in step with the source. Skip this section unless you are editing that.
 
-The bundle is maintained with [lokf-agent-skills](https://github.com/noelmcloughlin/lokf-agent-skills),
-installed, never committed - `.agents/`, `.claude/`, and `skills-lock.json`
-are git-ignored - and CI installs the librarian skill itself at run time. To
-work on the bundle locally you need at most two, pinned to the release CI
-uses (GitHub CLI 2.90+):
+The bundle is maintained with [lokf-agent-skills](https://github.com/noelmcloughlin/lokf-agent-skills), installed, never committed - `.agents/`, `.claude/`, and `skills-lock.json` are git-ignored - and CI installs the librarian skill itself at run time. To work on the bundle locally you need at most two, pinned to the release CI uses (GitHub CLI 2.90+):
 
 ```bash
 for s in lokf-librarian lokf-curator; do   # derive / confirm concepts
-  gh skill install noelmcloughlin/lokf-agent-skills "$s@v0.9.0"
+  gh skill install noelmcloughlin/lokf-agent-skills
 done
 ```
 
-`lokf-scaffolding` is only for re-generating the `.lokf/` tooling and the
-two bundle workflows from their template (rare); `lokf-docent` only lets an
-agent answer questions from the bundle. Neither is needed to contribute.
+`lokf-scaffolding` is only for re-generating the `.lokf/` tooling and the two bundle workflows from their template (rare); `lokf-docent` only lets an agent answer questions from the bundle. Neither is needed to contribute.
 
 ## Layout
 
 Source lives in `src/`, following the upstream [obsidian-sample-plugin](https://github.com/obsidianmd/obsidian-sample-plugin) convention:
 
 | File | Responsibility |
-|---|---|
+| --- | --- |
 | `src/main.ts` | Plugin lifecycle - commands, status bar, vault scanning, bundle-root resolution |
 | `src/settings.ts` | The settings tab |
 | `src/validator.ts` | The LOKF rule engine (import-free, plain-Node testable) |

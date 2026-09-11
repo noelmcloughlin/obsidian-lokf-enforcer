@@ -15,7 +15,7 @@ verified:
 # Commands
 
 | id | name |
-|---|---|
+| --- | --- |
 | `validate-vault` | Validate vault (full LOKF report) |
 | `validate-active` | Validate active note |
 | `scaffold-root-header` | Insert semantic header template into root index.md |

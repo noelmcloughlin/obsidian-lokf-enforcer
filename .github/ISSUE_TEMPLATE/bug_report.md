@@ -14,7 +14,7 @@ Steps to reproduce the behavior.
 **Expected behavior**
 What you expected to happen.
 
-### Environment
+## Environment
 
 - Obsidian version:
 - OS:

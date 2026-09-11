@@ -11,7 +11,7 @@ generated:
 # Sources swept for this bootstrap discovery pass
 
 | Source | Yields | Re-check by |
-|---|---|---|
+| --- | --- | --- |
 | `manifest.json`, `package.json` | plugin identity, version, dependencies | diff against the last recorded `version`/`minAppVersion` |
 | `src/main.ts`, `src/validator.ts`, `src/report-view.ts`, `src/settings.ts` | the four Service concepts | re-read each file; a new/removed command, rule group, or settings group is a gap |
 | `README.md` | commands/settings tables, privacy stance | diff the Commands/Settings/Privacy sections |

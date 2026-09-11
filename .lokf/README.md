@@ -67,6 +67,11 @@ uv run lokf convert knowledge --format ttl
 3. Link concepts with typed-relation keys whose values are target `id`s - e.g. `dependsOn:`, `about:`, `references:`, `isPartOf:`. Run `uv run lokf vocab` to list available relations.
 4. Add the concept to the table of contents in `knowledge/index.md`.
 5. Run `just lokf-validate` before committing.
+6. If a sentence uses a spaced dash ("X - Y") as punctuation, don't let
+   line-wrapping put the `-` at the start of a line - Markdown reads that as
+   a list item, tripping `lint-and-docs.yaml`'s `MD032` on a paragraph that
+   was never meant to be a list. Reword or rewrap so the dash stays
+   mid-line.
 
 ## Learn more
 

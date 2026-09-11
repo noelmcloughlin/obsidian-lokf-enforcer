@@ -57,7 +57,7 @@ The **scaffold command** (below) targets whichever bundle the active note belong
 Open the command palette and search for **LOKF**:
 
 | Command | What it does |
-|---|---|
+| --- | --- |
 | Validate vault (full LOKF report) | Scan everything and open the report panel |
 | Validate active note | Check the current note |
 | Insert semantic header template into root index.md | Adds a starter header, only if the root `index.md` has no frontmatter at all |
