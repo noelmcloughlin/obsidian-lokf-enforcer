@@ -15,6 +15,11 @@
   padding: 2px 8px;
   font-size: var(--font-ui-smaller);
 }
+.lokf-filter {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-size: var(--font-ui-smaller);
+}
 
 .lokf-summary {
   display: flex;
@@ -147,6 +152,18 @@
 .lokf-issues {
   padding: 2px 4px 4px 26px;
 }
+.lokf-key-group {
+  margin-top: 2px;
+}
+.lokf-key-label {
+  color: var(--text-muted);
+  font-size: var(--font-ui-smaller);
+  font-family: var(--font-monospace);
+  margin-top: 3px;
+}
+.lokf-key-group .lokf-issue {
+  padding-left: 10px;
+}
 .lokf-issue {
   display: flex;
   align-items: flex-start;
@@ -154,8 +171,51 @@
   margin-top: 2px;
   line-height: 1.35;
 }
+.lokf-issue-clickable {
+  cursor: pointer;
+  border-radius: 4px;
+}
+.lokf-issue-clickable:hover {
+  background: var(--background-modifier-hover);
+}
+.lokf-issue-clickable:focus-visible {
+  outline: 1px solid var(--interactive-accent);
+  outline-offset: -1px;
+}
+.lokf-group-header:focus-visible,
+.lokf-caret:focus-visible {
+  outline: 1px solid var(--interactive-accent);
+  outline-offset: -1px;
+  border-radius: 4px;
+}
+
+/* in-editor inline diagnostics (inline.ts) */
+.lokf-diag {
+  text-decoration-line: underline;
+  text-decoration-style: wavy;
+  text-decoration-thickness: 1px;
+  text-underline-offset: 2px;
+}
+.lokf-diag-error {
+  text-decoration-color: var(--text-error);
+}
+.lokf-diag-warning {
+  text-decoration-color: var(--text-warning);
+}
+
+/* concept quick-switcher (concept-modal.ts) */
+.lokf-suggest-meta {
+  display: block;
+  color: var(--text-muted);
+}
 .lokf-sev {
   flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+}
+.lokf-sev svg {
+  width: 14px;
+  height: 14px;
 }
 .lokf-sev-error {
   color: var(--text-error);
@@ -188,3 +248,54 @@
   font-size: var(--font-ui-smaller);
   color: var(--text-muted);
 }
+
+/* promote-body-links review dialog (propose-modal.ts) */
+.lokf-propose-intro {
+  color: var(--text-muted);
+}
+.lokf-propose-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-height: 50vh;
+  overflow-y: auto;
+  margin: 8px 0;
+}
+.lokf-propose-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 6px 8px;
+  border-radius: var(--radius-s);
+  cursor: pointer;
+}
+.lokf-propose-row:hover {
+  background: var(--background-modifier-hover);
+}
+.lokf-propose-body {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.lokf-propose-predicate {
+  font-family: var(--font-monospace);
+  color: var(--text-accent);
+}
+.lokf-propose-target {
+  font-family: var(--font-monospace);
+}
+.lokf-propose-detail {
+  color: var(--text-muted);
+}
+.lokf-propose-buttons {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+.lokf-confirm-buttons {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 12px;
+}
+

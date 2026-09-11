@@ -28,5 +28,6 @@ run `npm install && npm run dev` (or `npm run build` for a one-off) before
 the first reload, and again after any `git pull` that touches `src/`.
 
 `validator.ts` must stay import-free, and free of anything an installed OKF
-v0.2 validator already checks (required `type`, provenance/trust/lifecycle,
-Attested Computation, `index.md`/`log.md` structure).
+v0.2 validator already checks (required `type`, Attested Computation,
+`index.md`/`log.md` structure) - except the *shape* of the OKF v0.2 §5
+trust/lifecycle fields, which it does check.

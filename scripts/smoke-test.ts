@@ -25,11 +25,20 @@ import {
   mintExpectedId,
   resolveRelationTarget,
   isExcluded,
+  isIgnoredByFrontmatter,
+  applySeverityOverrides,
+  applyFieldAliases,
   DEFAULT_SETTINGS,
   type LokfIssue,
   type LokfSettings,
 } from "../src/validator";
-
+import { locateFrontmatterKey, locationToDocRange } from "../src/locator";
+import { pluginDefaultSettings, SCHEMA_VERSION, LOKF_VOCAB } from "../src/vocab";
+import { buildConceptGraph, type ConceptRecord } from "../src/graph";
+import { detectSuggestContext, withinFrontmatter } from "../src/suggest-context";
+import { computeFixes, type FixEdit } from "../src/fixes";
+import { extractBodyLinks, classifyLink, buildProposals, type BodyLink } from "../src/propose";
+import { issueMatchesFilter, topLevelKey } from "../src/report-filter";
 let failures = 0;
 
 function expect(name: string, condition: boolean, detail: string): boolean {
@@ -129,11 +138,18 @@ section("base_iri inside a denylisted host on a non-default port", () => {
   expect("one authority error", errors(issues) === 1 && issues[0]?.rule === "lokf/2-authority", show(issues));
 });
 
-section("base_iri missing trailing slash", () => {
+section("base_iri missing terminator", () => {
   const issues = check("index.md", `---\nlokf_version: "0.2"\nbase_iri: https://acme.example/knowledge\n---\n`, {
     isRoot: true,
   });
   expect("one structural error", errors(issues) === 1, show(issues));
+});
+
+section("base_iri may terminate with # (hash namespace)", () => {
+  const issues = check("index.md", `---\nlokf_version: "0.2"\nbase_iri: https://acme.example/ns#\n---\n`, {
+    isRoot: true,
+  });
+  expect("a #-terminated base_iri is accepted", errors(issues) === 0, show(issues));
 });
 
 section("unknown lokf_version", () => {
@@ -200,6 +216,54 @@ section("excludeFolders accepts the same spellings normalizeBundleRoot does", ()
   const settings = { ...DEFAULT_SETTINGS, excludeFolders: ["notes"] };
   expect("a sibling folder with a shared prefix is not excluded", !isExcluded("notes-archive/a.md", settings), "expected false");
   expect("an unrelated folder is not excluded", !isExcluded("other/a.md", settings), "expected false");
+});
+
+section("per-note opt-out (isIgnoredByFrontmatter + orchestrator short-circuit)", () => {
+  const d = DEFAULT_SETTINGS;
+  expect("`lokf: ignore` opts out", isIgnoredByFrontmatter({ lokf: "ignore" }, d), "expected true");
+  expect("`lokf: true` opts out", isIgnoredByFrontmatter({ lokf: true }, d), "expected true");
+  expect("`lokf: SKIP` is case-insensitive", isIgnoredByFrontmatter({ lokf: "SKIP" }, d), "expected true");
+  expect("no opt-out key means not ignored", !isIgnoredByFrontmatter({ type: "Reference" }, d), "expected false");
+  expect("an unrelated value under the key does not opt out", !isIgnoredByFrontmatter({ lokf: "0.2" }, d), "expected false");
+  expect("`lokf: false` does not opt out", !isIgnoredByFrontmatter({ lokf: false }, d), "expected false");
+  expect("a blank opt-out key disables the feature", !isIgnoredByFrontmatter({ lokf: "ignore" }, { ...d, ignoreFrontmatterKey: "" }), "expected false");
+  // A note that would otherwise warn is silenced entirely, root header included.
+  const wouldWarn = `---\ntype: Nonsense\nlokf: ignore\n---\n`;
+  expect("an opted-out concept yields no findings", check("misc/wip.md", wouldWarn).length === 0, show(check("misc/wip.md", wouldWarn)));
+  const badRoot = `---\nlokf_version: "0.2"\nbase_iri: notaurl\nlokf: ignore\n---\n`;
+  expect("an opted-out root header yields no findings", check("index.md", badRoot, { isRoot: true }).length === 0, show(check("index.md", badRoot, { isRoot: true })));
+  // The same note without the flag still warns, so the opt-out is what silences it.
+  const noFlag = `---\ntype: Nonsense\n---\n`;
+  expect("the same note warns without the flag", check("misc/wip.md", noFlag).length > 0, "expected findings");
+});
+
+section("per-rule severity escalation (applySeverityOverrides, escalation-only)", () => {
+  const warnIssue: LokfIssue = { severity: "warning", rule: "lokf/3-vocab", message: "unknown type", key: "type" };
+  const errIssue: LokfIssue = { severity: "error", rule: "lokf/2-header", message: "bad base_iri", key: "base_iri" };
+  const base = [warnIssue, errIssue];
+  expect("no escalation list leaves severities untouched", applySeverityOverrides(base, DEFAULT_SETTINGS) === base, "expected same array");
+  const escalated = applySeverityOverrides(base, { ...DEFAULT_SETTINGS, escalateToError: ["lokf/3-vocab"] });
+  expect("a listed rule's warning becomes an error", escalated[0]?.severity === "error", show(escalated));
+  expect("an unlisted rule's warning is unchanged", applySeverityOverrides(base, { ...DEFAULT_SETTINGS, escalateToError: ["lokf/4-relations"] })[0]?.severity === "warning", "expected warning");
+  // The invariant: a structural error is never downgraded, even if its rule is listed.
+  const cannotDowngrade = applySeverityOverrides(base, { ...DEFAULT_SETTINGS, escalateToError: ["lokf/2-header", "lokf/3-vocab"] });
+  expect("a default error stays an error (never downgraded)", cannotDowngrade[1]?.severity === "error", show(cannotDowngrade));
+  // Whole-orchestrator: an unknown type warns by default, errors when escalated.
+  const doc = `---\ntype: Nonsense\n---\n`;
+  expect("orchestrator escalates a warning to an error", errors(check("m/a.md", doc, { settings: { ...DEFAULT_SETTINGS, escalateToError: ["lokf/3-vocab"] } })) === 1, "expected one error");
+});
+
+section("field aliasing (applyFieldAliases) - opt-in key normalization", () => {
+  const data = { type: "Reference", depends_on: "./other.md", is_part_of: "./parent.md" };
+  expect("no aliases returns the same object", applyFieldAliases(data, []) === data, "expected identity");
+  const mapped = applyFieldAliases(data, ["depends_on=dependsOn", "is_part_of=isPartOf"]);
+  expect("the user key is renamed to canonical", mapped["dependsOn"] === "./other.md" && !("depends_on" in mapped), JSON.stringify(mapped));
+  expect("a second alias also applies", mapped["isPartOf"] === "./parent.md", JSON.stringify(mapped));
+  expect("the original object is not mutated", "depends_on" in data, "expected copy-on-write");
+  // An absent source key, or a canonical key already present, is left alone.
+  expect("an absent source key is a no-op", !("dependsOn" in applyFieldAliases({ type: "Reference" }, ["depends_on=dependsOn"])), "expected no key");
+  const collide = applyFieldAliases({ dependsOn: "./canon.md", depends_on: "./alias.md" }, ["depends_on=dependsOn"]);
+  expect("an existing canonical value is not clobbered", collide["dependsOn"] === "./canon.md", JSON.stringify(collide));
 });
 
 section("normalizeBundleRoots: normalizes, dedupes, sorts longest-first", () => {
@@ -301,7 +365,9 @@ section("Table with a bare-string field (structural mistake)", () => {
 section("Service missing recommended fields (warnings only)", () => {
   const issues = check("services/orders.md", `---\ntype: Service\ntitle: Orders API\n---\n`);
   expect("no errors", errors(issues) === 0, show(issues));
-  expect("three warnings (endpoint/http_method/documentation)", warnings(issues) === 3, show(issues));
+  // http_method is deliberately not recommended (lokf.yaml): "if applicable".
+  expect("two warnings (endpoint/documentation)", warnings(issues) === 2, show(issues));
+  expect("no http_method warning", !issues.some((i) => i.message.includes("http_method")), show(issues));
 });
 
 section("relationships: external IRI never flagged, broken relative link warned", () => {
@@ -597,6 +663,329 @@ function validateBundle(
   });
 }
 
+// ---- locator.ts: map a key path to its line/column in the raw frontmatter ----
+
+section("locateFrontmatterKey - top-level scalar", () => {
+  const raw = splitFrontmatter(
+    `---\nlokf_version: "0.2"\nbase_iri: https://x.example/knowledge/\n---\n`
+  ).raw;
+  const lines = raw.split("\n");
+  const loc = locateFrontmatterKey(raw, "base_iri");
+  expect("resolves base_iri", loc !== null, "got null");
+  if (loc) {
+    expect("lands on the base_iri line", lines[loc.line] === "base_iri: https://x.example/knowledge/", lines[loc.line] ?? "");
+    expect("key range covers the key", (lines[loc.line] ?? "").slice(loc.keyStart, loc.keyEnd) === "base_iri:", show([]));
+    expect(
+      "value range covers the value",
+      (lines[loc.line] ?? "").slice(loc.valueStart, loc.valueEnd) === "https://x.example/knowledge/",
+      (lines[loc.line] ?? "").slice(loc.valueStart, loc.valueEnd)
+    );
+  }
+});
+
+section("locateFrontmatterKey - one level of map nesting", () => {
+  const raw = splitFrontmatter(
+    `---\npublisher:\n  type: Person\n  id: https://x.example/knowledge/person/you\n  name: You\n---\n`
+  ).raw;
+  const lines = raw.split("\n");
+  const type = locateFrontmatterKey(raw, "publisher.type");
+  expect("resolves publisher.type", !!type && (lines[type.line] ?? "").trim() === "type: Person", show([]));
+  const name = locateFrontmatterKey(raw, "publisher.name");
+  expect("resolves publisher.name", !!name && (lines[name.line] ?? "").trim() === "name: You", show([]));
+});
+
+section("locateFrontmatterKey - list indices and item children", () => {
+  const raw = splitFrontmatter(
+    `---\nfields:\n  - name: a\n  - name: b\nrelations:\n  - predicate: about\n    target: ./x.md\n---\n`
+  ).raw;
+  const lines = raw.split("\n");
+  const second = locateFrontmatterKey(raw, "fields[1]");
+  expect("fields[1] lands on the second item", !!second && (lines[second.line] ?? "").trim() === "- name: b", show([]));
+  const target = locateFrontmatterKey(raw, "relations[0].target");
+  expect("relations[0].target lands on the target line", !!target && (lines[target.line] ?? "").trim() === "target: ./x.md", show([]));
+});
+
+// ---- A0: findings carry a key anchor a UI can jump to ----
+
+section("locateFrontmatterKey - absent key and graceful fallback", () => {
+  const raw = splitFrontmatter(`---\npublisher:\n  type: Person\n---\n`).raw;
+  const lines = raw.split("\n");
+  expect("absent top-level key returns null", locateFrontmatterKey(raw, "nonexistent") === null, "expected null");
+  const partial = locateFrontmatterKey(raw, "publisher.bogus");
+  expect(
+    "unresolved child falls back to the deepest resolved container",
+    !!partial && (lines[partial.line] ?? "").trim() === "publisher:",
+    show([])
+  );
+});
+
+section("locationToDocRange - block-relative location maps to document offsets", () => {
+  const doc = `---\nlokf_version: "0.2"\nbase_iri: https://x.example/knowledge/\n---\n\n# Body\n`;
+  const raw = splitFrontmatter(doc).raw;
+  const loc = locateFrontmatterKey(raw, "base_iri");
+  expect("base_iri located", loc !== null, "got null");
+  if (loc) {
+    const { from, to } = locationToDocRange(doc, loc);
+    expect("range slices the value out of the whole document", doc.slice(from, to) === "https://x.example/knowledge/", doc.slice(from, to));
+  }
+});
+
+section("issues carry a key anchor where one is nameable", () => {
+  const idBase = { isRoot: true as const };
+  const baseErr = check("index.md", `---\nlokf_version: "0.2"\nbase_iri: notaurl\n---\n`, idBase);
+  expect("base_iri finding anchors to base_iri", baseErr.some((i) => i.key === "base_iri"), show(baseErr));
+
+  const typeWarn = check("note.md", `---\ntype: Nonsense\n---\n`);
+  expect("unknown type anchors to type", typeWarn.some((i) => i.key === "type"), show(typeWarn));
+
+  const relWarn = check("note.md", `---\ntype: Reference\ndependsOn: ./missing.md\n---\n`, {
+    baseIri: "https://x.example/knowledge/",
+    exists: () => false,
+  });
+  expect("unresolved relation anchors to its field", relWarn.some((i) => i.key === "dependsOn"), show(relWarn));
+});
+
+// ---- §9.2: the shipped vocabulary manifest, with fallback ----
+
+section("vocabulary manifest refreshes the plugin defaults", () => {
+  expect("manifest carries a schema version", SCHEMA_VERSION.length > 0, SCHEMA_VERSION);
+  expect("manifest validates whole", LOKF_VOCAB !== null, "LOKF_VOCAB was null (malformed manifest)");
+  const defaults = pluginDefaultSettings();
+  expect("known types gain Role from the pinned schema", defaults.knownTypes.includes("Role"), defaults.knownTypes.join(", "));
+  expect(
+    "predicates widen to the full RelationType vocabulary",
+    ["wasAttributedTo", "measures", "memberOf", "holder"].every((p) => defaults.knownPredicates.includes(p)),
+    defaults.knownPredicates.join(", ")
+  );
+  expect("the four Diataxis genres are unchanged", defaults.genreValues.length === 4, defaults.genreValues.join(", "));
+});
+
+section("a schema-refreshed type no longer warns", () => {
+  const withRole = check("misc/lead.md", `---\ntype: Role\n---\n`, { settings: pluginDefaultSettings() });
+  expect("Role is accepted under the manifest defaults", !withRole.some((i) => i.rule === "lokf/3-vocab"), show(withRole));
+  const withoutManifest = check("misc/lead.md", `---\ntype: Role\n---\n`);
+  expect("Role still warns under the hard-coded fallback", withoutManifest.some((i) => i.rule === "lokf/3-vocab"), show(withoutManifest));
+});
+
+// ---- C: the concept graph (forward/inverse adjacency, orphans) ----
+
+section("buildConceptGraph - edges, inverse, grouping, and orphans", () => {
+  const records: ConceptRecord[] = [
+    { path: "a.md", type: "Service", id: null, targets: ["b.md"] },
+    { path: "b.md", type: "Dataset", id: null, targets: [] },
+    { path: "c.md", type: "Service", id: null, targets: ["b.md", "missing.md", "c.md"] },
+    { path: "island.md", type: "Document", id: null, targets: [] },
+  ];
+  const g = buildConceptGraph(records);
+  expect("b is linked to by a and c", (g.inbound.get("b.md") ?? []).sort().join(",") === "a.md,c.md", JSON.stringify([...g.inbound]));
+  expect("a's only edge is to b", (g.outbound.get("a.md") ?? []).join(",") === "b.md", JSON.stringify(g.outbound.get("a.md")));
+  expect("a non-concept target forms no edge", !(g.outbound.get("c.md") ?? []).includes("missing.md"), JSON.stringify(g.outbound.get("c.md")));
+  expect("a self-link forms no edge", !(g.outbound.get("c.md") ?? []).includes("c.md"), JSON.stringify(g.outbound.get("c.md")));
+  expect("two Service concepts are grouped by type", (g.byType.get("Service")?.length ?? 0) === 2, JSON.stringify([...g.byType.keys()]));
+  const orphanPaths = g.orphans.map((r) => r.path).sort();
+  expect("a, c, and island are orphans; b is not", orphanPaths.join(",") === "a.md,c.md,island.md", orphanPaths.join(","));
+});
+
+// ---- D: frontmatter autocomplete context detection ----
+
+section("withinFrontmatter - only inside the opening --- … --- block", () => {
+  const lines = ["---", "type: Reference", "---", "", "# Body"];
+  const read = (i: number) => lines[i] ?? "";
+  expect("the fence line 0 is not inside", !withinFrontmatter(read, lines.length, 0), "line 0");
+  expect("a header line is inside", withinFrontmatter(read, lines.length, 1), "line 1");
+  expect("the closing fence is not inside", !withinFrontmatter(read, lines.length, 2), "line 2");
+  expect("the body is not inside", !withinFrontmatter(read, lines.length, 4), "line 4");
+  const noFm = ["# Just a heading", "text"];
+  expect("a note without frontmatter is never inside", !withinFrontmatter((i) => noFm[i] ?? "", noFm.length, 0), "no fm");
+});
+
+section("detectSuggestContext - inline key: value slots", () => {
+  const one = (line: string, ch = line.length) => detectSuggestContext(() => line, 0, ch);
+  expect("type: completes classes", one("type: Ref")?.kind === "type", JSON.stringify(one("type: Ref")));
+  expect("type query is the partial", one("type: Ref")?.query === "Ref", JSON.stringify(one("type: Ref")));
+  expect("genre: completes genres", one("genre: how")?.kind === "genre", JSON.stringify(one("genre: how")));
+  expect("status: completes statuses", one("status: dra")?.kind === "status", JSON.stringify(one("status: dra")));
+  expect("a relation field completes targets", one("dependsOn: ./x")?.kind === "target", JSON.stringify(one("dependsOn: ./x")));
+  expect("relations target: completes targets", one("    target: ser")?.kind === "target", JSON.stringify(one("    target: ser")));
+  expect("relations predicate: completes predicates", one("    predicate: dep")?.kind === "predicate", JSON.stringify(one("    predicate: dep")));
+  expect("a non-LOKF key yields nothing", one("title: My note") === null, JSON.stringify(one("title: My note")));
+  expect("empty value gives an empty query at the cursor", one("type: ")?.query === "", JSON.stringify(one("type: ")));
+});
+
+section("detectSuggestContext - list items resolve to their parent key", () => {
+  const lines = ["---", "dependsOn:", "  - ser", "genre: reference", "  - x", "---"];
+  const read = (i: number) => lines[i] ?? "";
+  const item = detectSuggestContext(read, 2, read(2).length);
+  expect("a relation-field list item completes targets", item?.kind === "target" && item.query === "ser", JSON.stringify(item));
+  // A list item under a non-relation key (genre isn't multivalued) yields nothing.
+  const under = detectSuggestContext(read, 4, read(4).length);
+  expect("a list item under a non-relation key yields nothing", under === null, JSON.stringify(under));
+});
+
+// ---- E: safe quick-fixes (deterministic text edits) ----
+
+function applyFixEdits(doc: string, edits: FixEdit[]): string {
+  let out = doc;
+  for (const e of [...edits].sort((a, b) => b.from - a.from)) out = out.slice(0, e.from) + e.text + out.slice(e.to);
+  return out;
+}
+
+section("computeFixes - base_iri terminator, type alias, scalar relation", () => {
+  const headerDoc = `---\nlokf_version: "0.2"\nbase_iri: https://acme.example/knowledge\n---\n`;
+  const headerIssues = check("index.md", headerDoc, { isRoot: true });
+  const headerFixed = applyFixEdits(headerDoc, computeFixes(headerIssues, headerDoc, parse(headerDoc).data));
+  expect("appends the missing base_iri terminator", headerFixed.includes("base_iri: https://acme.example/knowledge/"), headerFixed);
+
+  const typeDoc = `---\ntype: runbook\n---\n`;
+  const typeFixed = applyFixEdits(typeDoc, computeFixes(check("p.md", typeDoc), typeDoc, parse(typeDoc).data));
+  expect("rewrites a known alias to its canonical class", typeFixed.includes("type: Playbook"), typeFixed);
+
+  const relDoc = `---\ntype: Reference\ndependsOn: ./other.md\n---\n`;
+  const relFixed = applyFixEdits(relDoc, computeFixes(check("r.md", relDoc, { baseIri: "https://x.example/knowledge/", exists: () => false }), relDoc, parse(relDoc).data));
+  expect("converts a bare-scalar relation to a one-item list", /dependsOn:\n {2}- \.\/other\.md/.test(relFixed), relFixed);
+});
+
+section("computeFixes - only unambiguous fixes; owned/unknown values left alone", () => {
+  // A base_iri that isn't a URL at all has no mechanical fix.
+  const badUrl = `---\nlokf_version: "0.2"\nbase_iri: notaurl\n---\n`;
+  expect("a non-URL base_iri is not fixed", computeFixes(check("index.md", badUrl, { isRoot: true }), badUrl, parse(badUrl).data).length === 0, "expected no fix");
+
+  // An authority violation (github) is terminated and owned - never guessed.
+  const authority = `---\nlokf_version: "0.2"\nbase_iri: https://github.com/acme/repo/knowledge/\n---\n`;
+  expect("an authority violation is not auto-fixed", computeFixes(check("index.md", authority, { isRoot: true }), authority, parse(authority).data).length === 0, "expected no fix");
+
+  // A truly unknown type (no alias) has no canonical to rewrite to.
+  const unknownType = `---\ntype: Widget\n---\n`;
+  expect("an unknown non-alias type is not rewritten", computeFixes(check("w.md", unknownType), unknownType, parse(unknownType).data).length === 0, "expected no fix");
+});
+
+// ---- §9.4: promote body links to typed relations (propose.ts) ----
+
+section("extractBodyLinks - finds prose links, skips images and code", () => {
+  const body =
+    "This depends on [the loader](./loader.md).\n\n" +
+    "![a diagram](diagram.png) is not a link.\n\n" +
+    "Ignore `[code](x.md)` in a span and\n\n```\n[fenced](y.md)\n```\n";
+  const links = extractBodyLinks(body);
+  const targets = links.map((l) => l.targetRaw);
+  expect("the prose link is extracted", targets.includes("./loader.md"), JSON.stringify(targets));
+  expect("the image is not a link", !targets.includes("diagram.png"), JSON.stringify(targets));
+  expect("the inline-code link is masked", !targets.includes("x.md"), JSON.stringify(targets));
+  expect("the fenced link is masked", !targets.includes("y.md"), JSON.stringify(targets));
+  const loader = links.find((l) => l.targetRaw === "./loader.md");
+  expect("the surrounding sentence is captured", (loader?.sentence ?? "").startsWith("This depends on the loader"), loader?.sentence ?? "");
+});
+
+section("classifyLink - cue phrases pick the relation, else relatedTo", () => {
+  expect("'depends on' -> dependsOn", classifyLink("This depends on the loader", "the loader").predicate === "dependsOn", "");
+  expect("'part of' -> isPartOf", classifyLink("It is part of the pipeline", "the pipeline").predicate === "isPartOf", "");
+  expect("'same as' -> sameAs", classifyLink("This is the same as the old metric", "the old metric").predicate === "sameAs", "");
+  const none = classifyLink("Here is the loader", "the loader");
+  expect("no cue -> relatedTo fallback", none.predicate === "relatedTo" && none.confidence < 0.5, JSON.stringify(none));
+  const adj = classifyLink("It depends on the loader", "the loader");
+  const far = classifyLink("It depends on quite a lot before we ever get anywhere near the loader", "the loader");
+  expect("adjacency boosts confidence", adj.confidence > far.confidence, `${adj.confidence} vs ${far.confidence}`);
+});
+
+section("buildProposals - resolves, dedups, skips asserted, sorts by confidence", () => {
+  const links: BodyLink[] = [
+    { text: "loader", targetRaw: "./loader.md", sentence: "This depends on loader" },
+    { text: "loader again", targetRaw: "loader.md", sentence: "It also depends on loader again" },
+    { text: "glossary", targetRaw: "./glossary.md", sentence: "See glossary" },
+    { text: "already", targetRaw: "./already.md", sentence: "It contains already" },
+    { text: "external", targetRaw: "https://elsewhere.example/x", sentence: "From external" },
+  ];
+  const resolve = (raw: string): { path: string; bundle: string } | null => {
+    if (raw.startsWith("http")) return null;
+    const stem = raw.replace(/^\.\//, "").replace(/\.md$/, "");
+    return { path: `${stem}.md`, bundle: stem };
+  };
+  const proposals = buildProposals(links, resolve, (p) => p === "already.md");
+  const preds = proposals.map((p) => `${p.predicate}:${p.targetBundle}`);
+  expect("the asserted target is skipped", !preds.some((p) => p.endsWith(":already")), JSON.stringify(preds));
+  expect("the external link is dropped", !preds.some((p) => p.endsWith(":x")), JSON.stringify(preds));
+  expect("the duplicate dependsOn:loader collapses to one", preds.filter((p) => p === "dependsOn:loader").length === 1, JSON.stringify(preds));
+  expect("glossary is proposed via references cue", preds.includes("references:glossary"), JSON.stringify(preds));
+  expect("proposals are sorted most-confident first", proposals.every((p, i) => i === 0 || proposals[i - 1]!.confidence >= p.confidence), "");
+});
+
+// ---- F: report finding filter ----
+
+section("issueMatchesFilter - text, sev:, rule:, and AND of terms", () => {
+  const issue = { severity: "warning", rule: "lokf/4-relations", message: "dependsOn does not resolve", key: "dependsOn" };
+  const path = "guides/setup.md";
+  expect("an empty query matches everything", issueMatchesFilter(path, issue, ""), "expected true");
+  expect("a plain term matches the message", issueMatchesFilter(path, issue, "resolve"), "expected true");
+  expect("a plain term matches the path", issueMatchesFilter(path, issue, "guides"), "expected true");
+  expect("a plain term matches the key", issueMatchesFilter(path, issue, "dependson"), "expected true");
+  expect("a non-matching term fails", !issueMatchesFilter(path, issue, "publisher"), "expected false");
+  expect("sev:warn matches a warning", issueMatchesFilter(path, issue, "sev:warn"), "expected true");
+  expect("sev:error does not match a warning", !issueMatchesFilter(path, issue, "sev:error"), "expected false");
+  expect("rule: matches the rule id", issueMatchesFilter(path, issue, "rule:lokf/4"), "expected true");
+  expect("rule: excludes a different rule", !issueMatchesFilter(path, issue, "rule:lokf/2"), "expected false");
+  expect("all terms must match (AND)", issueMatchesFilter(path, issue, "sev:warning resolve"), "expected true");
+  expect("one failing term fails the whole query", !issueMatchesFilter(path, issue, "sev:warning publisher"), "expected false");
+});
+
+section("topLevelKey - the frontmatter key a finding groups under", () => {
+  expect("a plain key is itself", topLevelKey("base_iri") === "base_iri", topLevelKey("base_iri"));
+  expect("a nested key drops the sub-path", topLevelKey("publisher.type") === "publisher", topLevelKey("publisher.type"));
+  expect("an indexed key drops the index and sub-path", topLevelKey("relations[2].target") === "relations", topLevelKey("relations[2].target"));
+  expect("a list-field key drops the index", topLevelKey("fields[0]") === "fields", topLevelKey("fields[0]"));
+  expect("no key groups as empty (a whole-note finding)", topLevelKey(undefined) === "", `"${topLevelKey(undefined)}"`);
+});
+
+const trust = (issues: LokfIssue[]) => issues.filter((i) => i.rule === "lokf/5-trust" || i.rule === "lokf/5-lifecycle");
+
+section("well-formed §5 fields draw no trust findings", () => {
+  const content =
+    `---\ntype: Reference\ngenerated:\n  by: process:lokf-librarian\n  at: 2026-01-01T00:00:00Z\n` +
+    `verified:\n  - by: human:alice\n    at: 2026-02-01\nstatus: draft\nstale_after: 2026-12-01\n` +
+    `sources:\n  - resource: https://example.org/doc\n---\n`;
+  const issues = check("misc/thing.md", content, { settings: pluginDefaultSettings() });
+  expect("no §5 shape findings on a well-formed concept", trust(issues).length === 0, show(trust(issues)));
+});
+
+section("a plain bundle with no §5 fields draws no trust findings", () => {
+  const issues = check("misc/thing.md", `---\ntype: Reference\ntitle: A thing\n---\n`);
+  expect("nothing fires when §5 is absent", trust(issues).length === 0, show(trust(issues)));
+});
+
+section("malformed §5 shapes each warn (never error)", () => {
+  const badVerified = check("m/a.md", `---\ntype: Reference\nverified: yes\n---\n`);
+  expect("a scalar verified warns", trust(badVerified).some((i) => i.key === "verified") && errors(badVerified) === 0, show(badVerified));
+
+  const noBy = check("m/b.md", `---\ntype: Reference\ngenerated:\n  at: 2026-01-01\n---\n`);
+  expect("generated missing by warns", trust(noBy).some((i) => i.rule === "lokf/5-trust"), show(noBy));
+
+  const badActor = check("m/c.md", `---\ntype: Reference\nverified:\n  - by: alice\n    at: 2026-01-01\n---\n`);
+  expect("a non-actor by warns and anchors to the actor", trust(badActor).some((i) => i.key === "verified[0].by"), show(badActor));
+
+  const badStatus = check("m/d.md", `---\ntype: Reference\nstatus: archived\n---\n`, { settings: pluginDefaultSettings() });
+  expect("an out-of-vocabulary status warns", trust(badStatus).some((i) => i.rule === "lokf/5-lifecycle" && i.key === "status"), show(badStatus));
+
+  const badStale = check("m/e.md", `---\ntype: Reference\nstale_after: someday\n---\n`);
+  expect("a non-date stale_after warns", trust(badStale).some((i) => i.key === "stale_after"), show(badStale));
+
+  const badSource = check("m/f.md", `---\ntype: Reference\nsources:\n  - title: no resource here\n---\n`);
+  expect("a source missing resource warns", trust(badSource).some((i) => i.key === "sources[0]"), show(badSource));
+});
+
+section("the trust-shape check can be switched off", () => {
+  const off: LokfSettings = { ...DEFAULT_SETTINGS, checkTrustShape: false };
+  const issues = check("m/g.md", `---\ntype: Reference\nverified: yes\nstatus: archived\n---\n`, { settings: off });
+  expect("no trust findings when disabled", trust(issues).length === 0, show(trust(issues)));
+});
+section("the by actor pattern matches lokf.yaml (strict: human/process/producer-version)", () => {
+  const ok = (by: string) =>
+    trust(check("m/a.md", `---\ntype: Reference\ngenerated:\n  by: ${by}\n  at: 2026-01-01\n---\n`)).length === 0;
+  expect("human:<id> is a valid actor", ok("human:jsmith@acme"), "human: rejected");
+  expect("process:<id> is a valid actor", ok("process:metrics-nightly"), "process: rejected");
+  expect("<producer>/<version> is a valid actor", ok("reference_agent/gemini-2.5-pro"), "producer/version rejected");
+  // A source's `author` admits `team:` etc., but a `by` slot does not.
+  expect("team:<id> is rejected for a by slot", !ok("team:analytics"), "team: should not pass a by slot");
+  expect("a bare name is rejected", !ok("John Smith"), "bare name should not pass");
+});
 // (a) the lokf-scaffolding skeleton, with its <PLACEHOLDER> tokens filled in as
 // a real project would. scripts/fixtures/scaffolding-skeleton is a frozen copy
 // of lokf-agent-skills' skills/lokf-scaffolding/templates/knowledge - a golden
