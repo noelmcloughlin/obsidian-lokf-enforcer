@@ -24,14 +24,16 @@ verified:
 so it runs unchanged under Obsidian and under plain Node
 (`scripts/smoke-test.ts`). Callers hand in already-parsed frontmatter.
 
-It implements four rule groups against LOKF v0.2: the bundle-root semantic
+It implements five rule groups against LOKF v0.2: the bundle-root semantic
 header (`validateRootHeader`), the type vocabulary and type-specific fields
 (`validateTypeVocabulary`), typed relationships with target-existence checking
-(`validateRelationships`), and id/IRI-minting consistency
-(`validateConceptId`). It deliberately does **not** reimplement anything OKF
-v0.2 already covers - required `type`, provenance/trust/lifecycle, Attested
-Computation, `index.md`/`log.md` structure - that is the installed OKF
-validator's job (see [Why LOKF Enforcer](../explanation/why-lokf-enforcer.md)).
+(`validateRelationships`), id/IRI-minting consistency
+(`validateConceptId`), and the *shape* of the OKF v0.2 §5 trust/lifecycle
+fields a bundle uses (`validateTrustLifecycle`). It deliberately does **not**
+reimplement anything OKF v0.2 already covers - required `type`, Attested
+Computation, `index.md`/`log.md` structure, or the credibility *depth* of the
+§5 fields - that is the installed OKF validator's job (see
+[Why LOKF Enforcer](../explanation/why-lokf-enforcer.md)).
 
 Frontmatter values are never assumed to be strings: a scalar (string, number,
 or boolean) is coerced to text for messages, while a mapping or list is named

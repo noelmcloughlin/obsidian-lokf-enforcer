@@ -11,9 +11,11 @@ generated:
 
 # Overview
 
-OKF v0.2 defines required `type`, and the provenance/trust/lifecycle families
-(`generated`, `verified`, `sources`, `status`, `stale_after`) and Attested
-Computation shape that LOKF Enforcer deliberately does not check - see
+OKF v0.2 defines required `type`, the provenance/trust/lifecycle families
+(`generated`, `verified`, `sources`, `status`, `stale_after`), and Attested
+Computation shape. LOKF Enforcer checks the *shape* of the trust/lifecycle
+family (a bundle that uses it) but deliberately does not check required
+`type` or Attested Computation shape - see
 [Why LOKF Enforcer](../explanation/why-lokf-enforcer.md).
 [OKF Enforcer](https://github.com/MartinForReal/okf-enforcer) is one existing
 validator for this layer.

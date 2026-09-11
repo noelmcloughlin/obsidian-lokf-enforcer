@@ -1,5 +1,5 @@
 // main.ts - LOKF Enforcer plugin entry point
-import { Notice, Plugin, TFile, TFolder, type TAbstractFile, type WorkspaceLeaf, debounce, parseYaml } from "obsidian";
+import { MarkdownView, Notice, Plugin, TFile, TFolder, type EditorPosition, type TAbstractFile, type WorkspaceLeaf, debounce, parseYaml } from "obsidian";
 import {
   type LokfSettings,
   type LokfIssue,
@@ -9,15 +9,32 @@ import {
   readBaseIri,
   splitFrontmatter,
   isExcluded,
+  isReserved,
   hiddenRootSegment,
   normalizeBundleRoots,
   resolveBundleRoot,
   bundleRootIndexPath,
   toBundlePath,
   toVaultPath,
+  resolveRelationTarget,
+  RELATION_FIELDS,
+  applyFieldAliases,
+  applySeverityOverrides,
 } from "./validator";
 import { LokfReportView, LOKF_VIEW_TYPE, type FileResult } from "./report-view";
+import { locateFrontmatterKey } from "./locator";
 import { LokfSettingTab } from "./settings";
+import { lokfInlineExtension } from "./inline";
+import { pluginDefaultSettings, HARDCODED_VOCAB } from "./vocab";
+import { buildConceptGraph, type ConceptGraph, type ConceptRecord } from "./graph";
+import { ConceptSuggestModal } from "./concept-modal";
+import { LokfSuggest, type SuggestVocabulary } from "./suggest";
+import { computeFix, computeFixes } from "./fixes";
+import { extractBodyLinks, buildProposals, type Proposal } from "./propose";
+import { FindingSuggestModal, type FindingItem } from "./finding-modal";
+import { ConfirmModal } from "./confirm-modal";
+import type { LokfEnforcerApi, LokfFileFindings, LokfFinding } from "./public-api";
+import { ProposeModal } from "./propose-modal";
 
 // Sibling-plugin detection (below, `detectOkfValidator`) is disabled: it read
 // `app.plugins`, which is not public API and is a routine flag in community
@@ -62,13 +79,25 @@ interface ParsedNote {
   data: Record<string, unknown>;
 }
 
+function arraysEqual(a: string[], b: readonly string[]): boolean {
+  return a.length === b.length && a.every((v, i) => v === b[i]);
+}
+
 export default class LokfPlugin extends Plugin {
   settings: LokfSettings = { ...DEFAULT_SETTINGS };
   statusEl!: HTMLElement;
+  /** Read-only surface for the sibling Curator or an agent; see public-api.ts.
+   *  Reachable as `app.plugins.plugins["lokf-enforcer"].api`. */
+  api!: LokfEnforcerApi;
   private siblingNoticeShown = false;
   private busy = false;
   private hasVerdict = false;
-  private pendingResults: { results: FileResult[]; scanned: number } | null = null;
+  /** The most recent full scan, retained so reopening the report panel (or the
+   *  ribbon) restores it without a rescan, and so the public API and the
+   *  finding-navigation commands have a report to read when the panel is shut. */
+  private lastReport: { results: FileResult[]; scanned: number } | null = null;
+  /** Subscribers to the API's "validation finished" hook. */
+  private validatedCallbacks = new Set<() => void>();
   private activeResult: { path: string; issues: LokfIssue[] } | null = null;
   /** One base_iri per configured bundle root, keyed by that root's normalized
    *  path ("" for the implicit whole-vault bundle). Re-reading a root index
@@ -77,6 +106,20 @@ export default class LokfPlugin extends Plugin {
   private baseIriCache = new Map<string, string | null>();
   private bundleRootsRaw: string[] | null = null;
   private bundleRootsResolved: string[] = [];
+  /** Paths whose metadata changed since the last flush, coalesced so a burst
+   *  of keystrokes re-validates each touched file once (the serializer's
+   *  recentlyUpdatedFiles pattern). Drained by `processPendingMeta`. */
+  private pendingMeta = new Set<string>();
+  private metaFlush: () => void = () => {};
+  /** Concept target candidates per bundle root, for autocomplete (D). Cleared
+   *  when the set of files changes (create/delete/rename), not on every edit -
+   *  a content change doesn't add or remove a target. */
+  private targetsCache = new Map<string, string[]>();
+
+  /** Position in the flat findings list for the next/previous-finding commands;
+   *  recomputed against the current report each step, so it just wraps. Starts
+   *  before the first item, so the first "next" lands on it. */
+  private findingCursor = -1;
 
   private exists = (path: string): boolean => !!this.app.vault.getAbstractFileByPath(path);
 
@@ -125,6 +168,9 @@ export default class LokfPlugin extends Plugin {
     this.statusEl.onClickEvent(() => {
       void this.onStatusClick();
     });
+    // A device that has opted out starts quiet: no status bar, and the inline
+    // and autocomplete surfaces already gate themselves on the same flag.
+    if (this.isDisabledOnDevice()) this.statusEl.hide();
 
     this.addCommand({
       id: "validate-vault",
@@ -147,10 +193,120 @@ export default class LokfPlugin extends Plugin {
       id: "scaffold-root-header",
       name: "Insert semantic header template into root index.md",
       callback: () => {
+        if (this.blockedOnDevice()) return;
         void this.scaffoldRootHeader();
       },
     });
+    this.addCommand({
+      id: "find-concept",
+      name: "Find a concept (by name, type, or relations)",
+      callback: () => {
+        if (this.blockedOnDevice()) return;
+        const graph = this.buildConceptGraph();
+        if (graph.records.length === 0) {
+          new Notice("LOKF: no concepts found in the configured bundle(s).");
+          return;
+        }
+        new ConceptSuggestModal(this.app, graph, graph.records, "Search concepts by name, type, or id…").open();
+      },
+    });
+    this.addCommand({
+      id: "find-orphan-concept",
+      name: "Find an orphan concept (nothing links to it)",
+      callback: () => {
+        if (this.blockedOnDevice()) return;
+        const graph = this.buildConceptGraph();
+        if (graph.orphans.length === 0) {
+          new Notice(
+            graph.records.length === 0
+              ? "LOKF: no concepts found in the configured bundle(s)."
+              : "LOKF: no orphan concepts - every concept has at least one inbound relation."
+          );
+          return;
+        }
+        new ConceptSuggestModal(
+          this.app,
+          graph,
+          graph.orphans,
+          `${graph.orphans.length} orphan concept(s) nothing links to…`
+        ).open();
+      },
+    });
+    this.addCommand({
+      id: "fix-active",
+      name: "Fix safe issues in the active note",
+      checkCallback: (checking) => {
+        const view = this.app.workspace.getActiveViewOfType(MarkdownView);
+        if (!view || !view.file || view.file.extension !== "md") return false;
+        if (!checking) void this.fixActiveNote(view);
+        return true;
+      },
+    });
+    this.addCommand({
+      id: "fix-vault",
+      name: "Fix safe issues across the vault",
+      callback: () => void this.fixVault(),
+    });
+    this.addCommand({
+      id: "propose-relations",
+      name: "Promote body links to typed relations…",
+      checkCallback: (checking) => {
+        const view = this.app.workspace.getActiveViewOfType(MarkdownView);
+        if (!view || !view.file || view.file.extension !== "md") return false;
+        if (!checking) void this.proposeRelations(view);
+        return true;
+      },
+    });
+    this.addCommand({
+      id: "go-to-finding",
+      name: "Go to a finding (search all findings)",
+      callback: () => {
+        if (this.blockedOnDevice()) return;
+        const findings = this.allFindings();
+        if (findings.length === 0) {
+          new Notice("LOKF: no findings yet - run a vault scan first.");
+          return;
+        }
+        new FindingSuggestModal(this.app, findings, (it) => void this.revealFinding(it.path, it.issue)).open();
+      },
+    });
+    this.addCommand({
+      id: "next-finding",
+      name: "Go to next finding",
+      callback: () => void this.gotoAdjacentFinding(1),
+    });
+    this.addCommand({
+      id: "previous-finding",
+      name: "Go to previous finding",
+      callback: () => void this.gotoAdjacentFinding(-1),
+    });
     this.addSettingTab(new LokfSettingTab(this.app, this));
+
+    // A ribbon shortcut to bring up the conformance report.
+    this.addRibbonIcon("shield-half", "LOKF conformance report", () => void this.activateView());
+
+    // The read-only surface a sibling plugin or agent may read validation state
+    // from, without either plugin depending on the other.
+    this.api = {
+      version: this.manifest.version,
+      getReport: () => this.getReport(),
+      validatePath: (path) => this.validatePath(path),
+      onValidated: (callback) => {
+        this.validatedCallbacks.add(callback);
+        return () => {
+          this.validatedCallbacks.delete(callback);
+        };
+      },
+    };
+
+    // The live, in-editor counterpart to the side report. Self-contained: the
+    // extension reads its file from `editorInfoField` and pulls findings back
+    // through `inlineIssuesFor`, so it needs no per-editor wiring and tears
+    // down with the plugin on unload.
+    this.registerEditorExtension(lokfInlineExtension(this));
+
+    // LOKF-aware value completions inside a concept's frontmatter.
+    this.registerEditorSuggest(new LokfSuggest(this.app, this));
 
     // Debounced so that arrowing through a file list doesn't read and parse a
     // note per keystroke.
@@ -164,25 +320,58 @@ export default class LokfPlugin extends Plugin {
 
     const forget = (file: TAbstractFile) => this.invalidateBaseIri(file.path);
     this.registerEvent(this.app.vault.on("modify", forget));
-    this.registerEvent(this.app.vault.on("create", forget));
-    this.registerEvent(this.app.vault.on("delete", forget));
+    this.registerEvent(
+      this.app.vault.on("create", (file) => {
+        this.invalidateBaseIri(file.path);
+        this.targetsCache.clear();
+      })
+    );
+    this.registerEvent(
+      this.app.vault.on("delete", (file) => {
+        this.invalidateBaseIri(file.path);
+        this.targetsCache.clear();
+        this.getReportView()?.removeFileResult(file.path);
+      })
+    );
     this.registerEvent(
       this.app.vault.on("rename", (file, oldPath) => {
         this.invalidateBaseIri(file.path);
         this.invalidateBaseIri(oldPath);
+        this.targetsCache.clear();
+        // The old path's row is stale (the note now lives elsewhere); the new
+        // path re-validates through the metadata "changed" that follows a move.
+        this.getReportView()?.removeFileResult(oldPath);
+        if (file instanceof TFile && file.extension === "md") this.queueMeta(file.path);
       })
     );
+
+    // Incremental re-validation (B): when Obsidian finishes re-parsing a note's
+    // frontmatter, re-check just that note from the cache instead of rescanning
+    // the vault. Fires for the note being edited, so the status bar and the
+    // Active-note panel section stay live alongside the inline underlines.
+    this.metaFlush = debounce(() => void this.processPendingMeta(), 400, true);
+    this.registerEvent(this.app.metadataCache.on("changed", (file) => this.queueMeta(file.path)));
 
     this.app.workspace.onLayoutReady(() => this.maybeShowSiblingNotice());
   }
 
   async loadSettings(): Promise<void> {
     const saved = (await this.loadData()) as Record<string, unknown> | null;
-    Object.assign(this.settings, DEFAULT_SETTINGS);
+    const defaults = pluginDefaultSettings();
+    Object.assign(this.settings, defaults);
     if (!saved) return;
     for (const key of Object.keys(DEFAULT_SETTINGS) as (keyof LokfSettings)[]) {
       if (saved[key] !== undefined) {
         (this.settings as unknown as Record<string, unknown>)[key] = saved[key];
+      }
+    }
+    // Refresh a vocabulary list still at the previous built-in default to the
+    // pinned schema's (so an upgrade picks up Role and the wider predicates),
+    // without clobbering a list the user actually customised.
+    for (const key of ["knownTypes", "knownPredicates", "genreValues", "conceptStatuses"] as const) {
+      const savedVal = saved[key];
+      if (Array.isArray(savedVal) && arraysEqual(savedVal as string[], HARDCODED_VOCAB[key])) {
+        (this.settings as unknown as Record<string, unknown>)[key] = defaults[key];
       }
     }
     if (typeof saved["siblingNoticeShown"] === "boolean") {
@@ -194,6 +383,49 @@ export default class LokfPlugin extends Plugin {
     await this.saveData({ ...this.settings, siblingNoticeShown: this.siblingNoticeShown });
   }
 
+  // ---- Device-local disable (H) ----
+
+  /** Stored via app.loadLocalStorage/saveLocalStorage, which are per-vault and
+   *  per-device and never synced - so a vault shared to a phone can silence the
+   *  plugin there without changing its behaviour on the desktop. */
+  private static readonly DEVICE_DISABLED_KEY = "lokf-enforcer:disabled-on-device";
+
+  isDisabledOnDevice(): boolean {
+    return this.app.loadLocalStorage(LokfPlugin.DEVICE_DISABLED_KEY) === true;
+  }
+
+  setDisabledOnDevice(disabled: boolean): void {
+    // Clearing to null (not false) removes the entry rather than leaving a
+    // per-device flag behind once the plugin is re-enabled.
+    this.app.saveLocalStorage(LokfPlugin.DEVICE_DISABLED_KEY, disabled ? true : null);
+    this.applyDeviceState();
+  }
+
+  /** Bring the reactive surfaces (status bar, inline underlines, active
+   *  verdict) into line with the current device-local state. */
+  private applyDeviceState(): void {
+    if (this.isDisabledOnDevice()) {
+      this.statusEl.hide();
+      this.setActiveResult(null);
+    } else {
+      this.statusEl.show();
+      const active = this.app.workspace.getActiveFile();
+      if (active && active.extension === "md") void this.validateActive(active, false);
+      else this.refreshStatus();
+    }
+    // Repaint open editors so inline underlines appear or clear at once.
+    this.app.workspace.updateOptions();
+  }
+
+  /** True (with a notice) when the plugin is off on this device, so an
+   *  explicitly-invoked command does nothing - "off" means off everywhere, not
+   *  just for the passive surfaces. */
+  private blockedOnDevice(): boolean {
+    if (!this.isDisabledOnDevice()) return false;
+    new Notice("LOKF: disabled on this device - re-enable it in the plugin's settings.");
+    return true;
+  }
+
   /** Frontmatter parsing lives here, not in validator.ts, so the rule engine
    *  stays dependency-free and testable outside Obsidian. Null = unparseable,
    *  which is the installed OKF validator's error to report, not ours. */
@@ -202,10 +434,8 @@ export default class LokfPlugin extends Plugin {
     if (!hasFm) return { hasFm: false, data: {} };
     try {
       const parsed: unknown = parseYaml(raw);
-      return {
-        hasFm: true,
-        data: parsed && typeof parsed === "object" ? (parsed as Record<string, unknown>) : {},
-      };
+      const data = parsed && typeof parsed === "object" ? (parsed as Record<string, unknown>) : {};
+      return { hasFm: true, data: applyFieldAliases(data, this.settings.fieldAliases) };
     } catch {
       return null;
     }
@@ -295,9 +525,409 @@ export default class LokfPlugin extends Plugin {
   ): LokfIssue[] {
     const parsed = this.parseNote(content);
     if (!parsed) return [];
+    return this.issuesForParsed(vaultPath, parsed, root, isRoot, baseIri);
+  }
+
+  /** Validates already-parsed frontmatter, whether it came from a fresh read
+   *  (the scan) or straight from the metadata cache (the incremental path). */
+  private issuesForParsed(
+    vaultPath: string,
+    parsed: ParsedNote,
+    root: string,
+    isRoot: boolean,
+    baseIri: string | null
+  ): LokfIssue[] {
     const bundlePath = toBundlePath(vaultPath, root);
     const existsInBundle = (p: string): boolean => this.exists(toVaultPath(p, root));
     return validateLokfConcept(bundlePath, parsed.hasFm, parsed.data, isRoot, baseIri, this.settings, existsInBundle);
+  }
+
+  /** Already-parsed frontmatter from Obsidian's own metadata cache - the same
+   *  parse the rest of Obsidian (and the sibling Curator) sees, at no cost,
+   *  since the cache produced it. `frontmatter` carries an extra `position`
+   *  marker the rules simply never read. Absent frontmatter (or a not-yet-
+   *  indexed file) reads as none. */
+  private parsedFromCache(file: TFile): ParsedNote {
+    const fm = this.app.metadataCache.getFileCache(file)?.frontmatter;
+    return fm ? { hasFm: true, data: applyFieldAliases(fm, this.settings.fieldAliases) } : { hasFm: false, data: {} };
+  }
+
+  /** A bundle's base_iri read synchronously from the metadata cache, for the
+   *  inline editor path that can't await a vault read. Prefers the async
+   *  path's warmed cache when present; otherwise reads the root index.md's
+   *  cached frontmatter (no vault I/O), so the first paint after opening a note
+   *  still resolves minted ids and relation targets. Deliberately does not
+   *  populate `baseIriCache`, which the async path owns. */
+  private cachedBaseIriFor(root: string): string | null {
+    if (this.baseIriCache.has(root)) return this.baseIriCache.get(root) ?? null;
+    const rootIndex = this.app.vault.getAbstractFileByPath(this.rootIndexPathFor(root));
+    if (!(rootIndex instanceof TFile)) return null;
+    const fm = this.app.metadataCache.getFileCache(rootIndex)?.frontmatter;
+    return fm ? readBaseIri(fm) : null;
+  }
+
+  // ---- InlineHost: the surface the CodeMirror extension (inline.ts) pulls ----
+
+  inlineDiagnosticsEnabled(): boolean {
+    return !this.isDisabledOnDevice() && this.settings.inlineDiagnostics;
+  }
+
+  /** Synchronous findings for the note in the editor, or null when it is
+   *  outside every configured bundle (so the extension marks nothing). Mirrors
+   *  the panel's `validateActive` path, minus the async base_iri read. */
+  inlineIssuesFor(file: TFile, doc: string): LokfIssue[] | null {
+    if (!this.isConcept(file)) return null;
+    const root = this.resolveRoot(file.path) ?? "";
+    const baseIri = this.cachedBaseIriFor(root);
+    return this.issuesFor(file.path, doc, root, this.isRoot(file, root), baseIri);
+  }
+
+  // ---- Incremental re-validation (B) ----
+
+  private queueMeta(path: string): void {
+    if (this.isDisabledOnDevice()) return;
+    this.pendingMeta.add(path);
+    this.metaFlush();
+  }
+
+  /** Re-validate the notes whose metadata changed since the last flush, from
+   *  the cache, patching the open report and the active-note verdict in place.
+   *  A root index.md whose base_iri actually changed re-mints and re-resolves
+   *  the whole bundle, so that one case falls back to a single silent rescan. */
+  private async processPendingMeta(): Promise<void> {
+    const paths = [...this.pendingMeta];
+    this.pendingMeta.clear();
+    const view = this.getReportView();
+    const active = this.app.workspace.getActiveFile();
+    for (const path of paths) {
+      const file = this.app.vault.getAbstractFileByPath(path);
+      if (!(file instanceof TFile) || file.extension !== "md") continue;
+      if (!this.isConcept(file)) continue;
+      const root = this.resolveRoot(file.path) ?? "";
+      if (file.path === this.rootIndexPathFor(root)) {
+        const prev = this.cachedBaseIriFor(root);
+        this.invalidateBaseIri(file.path);
+        if (this.cachedBaseIriFor(root) !== prev) {
+          await this.scanVault(false, true);
+          return;
+        }
+      }
+      const baseIri = this.cachedBaseIriFor(root);
+      const issues = this.issuesForParsed(
+        file.path,
+        this.parsedFromCache(file),
+        root,
+        this.isRoot(file, root),
+        baseIri
+      );
+      view?.patchFileResult(file.path, issues);
+      if (active && active.path === file.path) this.setActiveResult({ path: file.path, issues });
+    }
+    if (paths.length) this.emitValidated();
+  }
+
+  // ---- Concept graph / index (C) ----
+
+  /** Build the whole-vault concept graph fresh from the metadata cache: every
+   *  concept (a bundled note that isn't a reserved index.md/log.md) with its
+   *  type, id, and the concepts its typed relations resolve to. Built on demand
+   *  rather than kept live, so a query is always accurate; the resolution reuses
+   *  the rules' own target logic so an edge here means exactly what a relation
+   *  check means. */
+  buildConceptGraph(): ConceptGraph {
+    const configDir = this.app.vault.configDir;
+    const conceptFiles = this.app.vault
+      .getMarkdownFiles()
+      .filter(
+        (f) =>
+          !f.path.startsWith(configDir + "/") &&
+          !isExcluded(f.path, this.settings) &&
+          this.isInBundle(f.path) &&
+          !isReserved(f.path)
+      );
+    const conceptPaths = new Set(conceptFiles.map((f) => f.path));
+    const records: ConceptRecord[] = [];
+    for (const f of conceptFiles) {
+      const parsed = this.parsedFromCache(f);
+      if (!parsed.hasFm) continue;
+      const data = parsed.data;
+      const root = this.resolveRoot(f.path) ?? "";
+      const baseIri = this.cachedBaseIriFor(root);
+      const type = typeof data["type"] === "string" ? data["type"].trim() || null : null;
+      const id = typeof data["id"] === "string" ? data["id"] : null;
+      records.push({
+        path: f.path,
+        type,
+        id,
+        targets: this.outgoingConceptTargets(data, baseIri, root, f.path, conceptPaths),
+      });
+    }
+    return buildConceptGraph(records);
+  }
+
+  /** The vault paths of the concepts a note's typed relations point at, using
+   *  the same resolution the relation check does (external IRIs and targets that
+   *  don't name a real concept are dropped, so each is a genuine edge). */
+  private outgoingConceptTargets(
+    data: Record<string, unknown>,
+    baseIri: string | null,
+    root: string,
+    selfVaultPath: string,
+    conceptPaths: Set<string>
+  ): string[] {
+    const bundleSelf = toBundlePath(selfVaultPath, root);
+    const cut = bundleSelf.lastIndexOf("/");
+    const conceptDir = cut > 0 ? bundleSelf.slice(0, cut) : "";
+    const out = new Set<string>();
+    const consider = (rawTarget: unknown) => {
+      if (typeof rawTarget !== "string") return;
+      const resolved = resolveRelationTarget(rawTarget, baseIri);
+      if (resolved.kind === "external-iri" || resolved.kind === "malformed") return;
+      const siblingDir = resolved.kind === "internal-relative" ? conceptDir : "";
+      const match = this.matchConcept(resolved.resolvedPath ?? "", siblingDir, root, conceptPaths);
+      if (match && match !== selfVaultPath) out.add(match);
+    };
+    for (const field of RELATION_FIELDS) {
+      const v = data[field];
+      if (typeof v === "string") consider(v);
+      else if (Array.isArray(v)) for (const x of v) consider(x);
+    }
+    const relations = data["relations"];
+    if (Array.isArray(relations)) {
+      for (const entry of relations) {
+        if (entry && typeof entry === "object") consider((entry as { target?: unknown }).target);
+      }
+    }
+    return [...out];
+  }
+
+  /** The vault path of the concept a resolved (bundle-relative) target names, or
+   *  null. Mirrors validator.ts's `targetExists`: tries the id and `.md`
+   *  spellings, a percent-decoded form, and - for a bare relative target - the
+   *  note's own directory. */
+  private matchConcept(bundleRelPath: string, siblingDir: string, root: string, conceptPaths: Set<string>): string | null {
+    if (!bundleRelPath) return null;
+    const bases = new Set([bundleRelPath]);
+    try {
+      bases.add(decodeURIComponent(bundleRelPath));
+    } catch {
+      // A malformed escape just means there is nothing extra to try.
+    }
+    if (siblingDir) for (const b of [...bases]) bases.add(`${siblingDir}/${b}`);
+    for (const b of bases) {
+      for (const candidate of [b, b + ".md"]) {
+        const vaultPath = toVaultPath(candidate, root);
+        if (conceptPaths.has(vaultPath)) return vaultPath;
+      }
+    }
+    return null;
+  }
+
+  // ---- SuggestHost: value completions inside frontmatter (D) ----
+
+  suggestEnabled(): boolean {
+    return !this.isDisabledOnDevice() && this.settings.autocomplete;
+  }
+
+  /** The vocabulary a concept's frontmatter completes against, from settings,
+   *  or null when the file isn't a concept in a configured bundle. */
+  suggestVocabularyFor(file: TFile): SuggestVocabulary | null {
+    if (!this.isConcept(file)) return null;
+    return {
+      types: this.settings.knownTypes,
+      genres: this.settings.genreValues,
+      statuses: this.settings.conceptStatuses,
+      predicates: this.settings.knownPredicates,
+    };
+  }
+
+  /** The other concepts in this file's bundle, as bundle-relative paths without
+   *  the `.md` extension - the resolvable targets a relation can name. Cached
+   *  per bundle root; the active file itself is excluded at call time. */
+  conceptTargets(file: TFile): string[] {
+    const root = this.resolveRoot(file.path);
+    if (root === null) return [];
+    let list = this.targetsCache.get(root);
+    if (!list) {
+      const configDir = this.app.vault.configDir;
+      list = this.app.vault
+        .getMarkdownFiles()
+        .filter(
+          (f) =>
+            !f.path.startsWith(configDir + "/") &&
+            !isExcluded(f.path, this.settings) &&
+            this.resolveRoot(f.path) === root &&
+            !isReserved(f.path)
+        )
+        .map((f) => toBundlePath(f.path, root).replace(/\.md$/i, ""))
+        .sort();
+      this.targetsCache.set(root, list);
+    }
+    const self = toBundlePath(file.path, root).replace(/\.md$/i, "");
+    return list.filter((p) => p !== self);
+  }
+
+  // ---- Safe quick-fixes (E) ----
+
+  /** Apply every deterministic fix for the active note's findings, as
+   *  format-preserving text edits through the editor (so it's one undo step and
+   *  no file reload). Owned values (base_iri authority, publisher identity) are
+   *  never guessed - only unambiguous corrections. */
+  private async fixActiveNote(view: MarkdownView): Promise<void> {
+    if (this.blockedOnDevice()) return;
+    const file = view.file;
+    if (!file || !this.isConcept(file)) {
+      new Notice("LOKF: the active note is not a concept in a configured bundle.");
+      return;
+    }
+    const editor = view.editor;
+    const doc = editor.getValue();
+    const parsed = this.parseNote(doc);
+    if (!parsed) return;
+    const root = this.resolveRoot(file.path) ?? "";
+    const baseIri = this.cachedBaseIriFor(root);
+    const issues = this.issuesForParsed(file.path, parsed, root, this.isRoot(file, root), baseIri);
+    const edits = computeFixes(issues, doc, parsed.data);
+    if (edits.length === 0) {
+      new Notice("LOKF: no safe fixes available in this note.");
+      return;
+    }
+    // computeFixes returns edits last-first, so applying in order never shifts a
+    // still-pending edit's offsets.
+    for (const edit of edits) {
+      editor.replaceRange(edit.text, editor.offsetToPos(edit.from), editor.offsetToPos(edit.to));
+    }
+    new Notice(`LOKF: applied ${edits.length} safe fix(es).`);
+  }
+
+  /** Apply every note's safe fixes across the whole vault in one pass, after an
+   *  explicit confirmation - the batch counterpart to "Fix safe issues in the
+   *  active note". Same deterministic, owned-value-safe fixes; recomputed per
+   *  file at write time through `vault.process` so offsets are always valid. */
+  private async fixVault(): Promise<void> {
+    if (this.blockedOnDevice()) return;
+    const files = this.candidateFiles();
+    const roots = [...new Set(files.map((f) => this.resolveRoot(f.path) ?? ""))];
+    await Promise.all(roots.map((r) => this.findBaseIriFor(r)));
+    const planned: TFile[] = [];
+    let total = 0;
+    for (const file of files) {
+      const root = this.resolveRoot(file.path) ?? "";
+      const content = await this.readOrNull(file);
+      if (content === null) continue;
+      const parsed = this.parseNote(content);
+      if (!parsed) continue;
+      const issues = this.issuesForParsed(file.path, parsed, root, this.isRoot(file, root), await this.findBaseIriFor(root));
+      const edits = computeFixes(issues, content, parsed.data);
+      if (edits.length) {
+        planned.push(file);
+        total += edits.length;
+      }
+    }
+    if (total === 0) {
+      new Notice("LOKF: no safe fixes across the vault.");
+      return;
+    }
+    const message = `Apply ${total} safe fix(es) across ${planned.length} note(s)? This edits the files directly.`;
+    new ConfirmModal(this.app, message, "Fix all", () => void this.applyVaultFixes(planned)).open();
+  }
+
+  private async applyVaultFixes(files: TFile[]): Promise<void> {
+    let noteCount = 0;
+    for (const file of files) {
+      const root = this.resolveRoot(file.path) ?? "";
+      const baseIri = this.cachedBaseIriFor(root);
+      let changed = false;
+      await this.app.vault.process(file, (data) => {
+        const parsed = this.parseNote(data);
+        if (!parsed) return data;
+        const edits = computeFixes(
+          this.issuesForParsed(file.path, parsed, root, this.isRoot(file, root), baseIri),
+          data,
+          parsed.data
+        );
+        if (edits.length === 0) return data;
+        changed = true;
+        // Edits are last-first, so applying in order never shifts a pending one.
+        let out = data;
+        for (const edit of edits) out = out.slice(0, edit.from) + edit.text + out.slice(edit.to);
+        return out;
+      });
+      if (changed) noteCount++;
+    }
+    new Notice(`LOKF: applied safe fixes across ${noteCount} note(s).`);
+  }
+
+  // ---- Promote body links to typed relations (§9.4) ----
+
+  /** Extract the note body's markdown links, resolve each to a bundle concept,
+   *  guess a typed relation from the surrounding sentence, and let the owner
+   *  choose which to add. A guess is never written unprompted - the modal is the
+   *  human confirmation the heuristic requires. */
+  private async proposeRelations(view: MarkdownView): Promise<void> {
+    if (this.blockedOnDevice()) return;
+    const file = view.file;
+    if (!file || !this.isConcept(file)) {
+      new Notice("LOKF: the active note is not a concept in a configured bundle.");
+      return;
+    }
+    const doc = view.editor.getValue();
+    const parsed = this.parseNote(doc);
+    if (!parsed || !parsed.hasFm) {
+      new Notice("LOKF: this note has no LOKF frontmatter to add relations to.");
+      return;
+    }
+    const { body } = splitFrontmatter(doc);
+    const root = this.resolveRoot(file.path) ?? "";
+    const baseIri = this.cachedBaseIriFor(root);
+    const conceptPaths = new Set(this.candidateFiles().filter((f) => !isReserved(f.path)).map((f) => f.path));
+    const bundleSelf = toBundlePath(file.path, root);
+    const cut = bundleSelf.lastIndexOf("/");
+    const conceptDir = cut > 0 ? bundleSelf.slice(0, cut) : "";
+    // Targets any relation already points at - a proposal for one is redundant.
+    const asserted = new Set(this.outgoingConceptTargets(parsed.data, baseIri, root, file.path, conceptPaths));
+    const resolve = (raw: string): { path: string; bundle: string } | null => {
+      const r = resolveRelationTarget(raw, baseIri);
+      if (r.kind === "external-iri" || r.kind === "malformed") return null;
+      const siblingDir = r.kind === "internal-relative" ? conceptDir : "";
+      const path = this.matchConcept(r.resolvedPath ?? "", siblingDir, root, conceptPaths);
+      if (!path || path === file.path) return null;
+      return { path, bundle: toBundlePath(path, root).replace(/\.md$/i, "") };
+    };
+    const proposals = buildProposals(extractBodyLinks(body), resolve, (p) => asserted.has(p));
+    if (proposals.length === 0) {
+      new Notice("LOKF: no new typed relations to propose from this note's links.");
+      return;
+    }
+    new ProposeModal(this.app, proposals, (chosen) => void this.applyProposals(file, chosen)).open();
+  }
+
+  /** Write accepted proposals into frontmatter, preserving everything else:
+   *  a named slot relation appends its bundle-relative target, any other
+   *  predicate appends a `{predicate, target}` entry to `relations`. */
+  private async applyProposals(file: TFile, proposals: Proposal[]): Promise<void> {
+    if (proposals.length === 0) return;
+    const slots = new Set<string>(RELATION_FIELDS);
+    await this.app.fileManager.processFrontMatter(file, (fm: Record<string, unknown>) => {
+      for (const p of proposals) {
+        if (slots.has(p.predicate)) {
+          const cur = fm[p.predicate];
+          const list: unknown[] = Array.isArray(cur) ? cur : cur === undefined ? [] : [cur];
+          if (!list.includes(p.targetBundle)) list.push(p.targetBundle);
+          fm[p.predicate] = list;
+        } else {
+          const relations: unknown[] = Array.isArray(fm["relations"]) ? fm["relations"] : [];
+          const dup = relations.some((r) => {
+            if (!r || typeof r !== "object") return false;
+            const entry = r as { predicate?: unknown; target?: unknown };
+            return entry.predicate === p.predicate && entry.target === p.targetBundle;
+          });
+          if (!dup) relations.push({ predicate: p.predicate, target: p.targetBundle });
+          fm["relations"] = relations;
+        }
+      }
+    });
+    new Notice(`LOKF: added ${proposals.length} typed relation(s).`);
   }
 
   /** Returns the items whose worker call threw, so a dropped file is reported
@@ -335,6 +965,10 @@ export default class LokfPlugin extends Plugin {
   }
 
   async scanVault(reveal = true, silent = false): Promise<void> {
+    if (this.isDisabledOnDevice()) {
+      if (!silent) new Notice("LOKF: disabled on this device - re-enable it in the plugin's settings.");
+      return;
+    }
     if (this.busy) {
       if (!silent) new Notice("LOKF: a scan is already running…");
       return;
@@ -384,6 +1018,10 @@ export default class LokfPlugin extends Plugin {
       }
 
       results.sort((a, b) => a.path.localeCompare(b.path));
+      // Rule-severity escalation also covers the synthetic bundle-level findings,
+      // which are assembled here rather than by validateLokfConcept; it is
+      // idempotent on the per-file results, which were escalated already.
+      for (const r of results) r.issues = applySeverityOverrides(r.issues, this.settings);
       this.renderResults(results, files.length);
 
       const active = this.app.workspace.getActiveFile();
@@ -404,18 +1042,52 @@ export default class LokfPlugin extends Plugin {
           `LOKF: scanned ${files.length} notes - ${errFiles} with errors${unreadableNote}, ${warnFiles} with warnings only.`
         );
       }
+      this.emitValidated();
     } finally {
       this.busy = false;
     }
   }
 
   private renderResults(results: FileResult[], scanned: number): void {
-    const view = this.getReportView();
-    // If the view is closed and a second scan lands before it reopens, this
-    // overwrites the earlier pending result - intentional, since only the
-    // latest scan is ever worth showing.
-    if (view) view.setResults(results, scanned);
-    else this.pendingResults = { results, scanned };
+    // Retain the latest scan so the ribbon, a reopened panel, the public API,
+    // and the finding-navigation commands can all read it even when the panel
+    // is closed; the open view (if any) is refreshed in step.
+    this.lastReport = { results, scanned };
+    this.getReportView()?.setResults(results, scanned);
+  }
+
+  // ---- Read-only public API (I) ----
+
+  /** The most recent scan as the public API's shape (structurally the internal
+   *  findings, exposed under the stable `LokfFileFindings` contract). Cloned, so
+   *  a consumer holding the snapshot can never mutate the plugin's own state. */
+  private getReport(): LokfFileFindings[] {
+    const results = this.getReportView()?.results ?? this.lastReport?.results ?? [];
+    return results.map((r) => ({ path: r.path, findings: r.issues.map((issue) => ({ ...issue })) }));
+  }
+
+  /** Validate one note on demand for the public API: read-only, writes nothing;
+   *  a non-concept or unreadable note returns no findings. */
+  private async validatePath(path: string): Promise<LokfFinding[]> {
+    const file = this.app.vault.getAbstractFileByPath(path);
+    if (!(file instanceof TFile) || file.extension !== "md" || !this.isConcept(file)) return [];
+    const root = this.resolveRoot(file.path) ?? "";
+    const baseIri = await this.findBaseIriFor(root);
+    const content = await this.readOrNull(file);
+    if (content === null) return [];
+    return this.issuesFor(file.path, content, root, this.isRoot(file, root), baseIri);
+  }
+
+  /** Notify API subscribers that a validation finished. A subscriber's callback
+   *  must never break validation, so each is isolated. */
+  private emitValidated(): void {
+    for (const callback of this.validatedCallbacks) {
+      try {
+        callback();
+      } catch {
+        // A consumer's callback throwing is its own bug, not ours to surface.
+      }
+    }
   }
 
   private setActiveResult(active: { path: string; issues: LokfIssue[] } | null): void {
@@ -425,7 +1097,99 @@ export default class LokfPlugin extends Plugin {
     this.refreshStatus();
   }
 
+  // ---- Finding navigation (F) ----
+
+  /** Every finding in the current report as a flat, path-then-report-order
+   *  list - the source both the quick-switcher and the next/previous commands
+   *  walk. Reads whatever the panel last showed (or the pending scan if it is
+   *  closed); synthetic bundle-level findings are included, they just don't
+   *  jump to a key. */
+  allFindings(): FindingItem[] {
+    const results = this.getReportView()?.results ?? this.lastReport?.results ?? [];
+    const items: FindingItem[] = [];
+    for (const r of results) for (const issue of r.issues) items.push({ path: r.path, issue });
+    return items;
+  }
+
+  private async gotoAdjacentFinding(delta: number): Promise<void> {
+    if (this.blockedOnDevice()) return;
+    const findings = this.allFindings();
+    if (findings.length === 0) {
+      new Notice("LOKF: no findings yet - run a vault scan first.");
+      return;
+    }
+    this.findingCursor = ((this.findingCursor + delta) % findings.length + findings.length) % findings.length;
+    const item = findings[this.findingCursor];
+    if (item) await this.revealFinding(item.path, item.issue);
+  }
+
+  /** Open the note and put the cursor on the offending frontmatter key,
+   *  selecting its value. Falls back to just opening when the finding names no
+   *  key (a whole-note finding) or its file doesn't exist (a synthetic
+   *  bundle-level finding). Shared by the report rows, the quick-switcher, and
+   *  the next/previous commands. */
+  async revealFinding(path: string, issue: LokfIssue): Promise<void> {
+    const file = this.app.vault.getAbstractFileByPath(path);
+    if (!(file instanceof TFile)) return;
+    const leaf = this.app.workspace.getLeaf(false);
+    await leaf.openFile(file);
+    const view = leaf.view;
+    if (!issue.key || !(view instanceof MarkdownView)) return;
+    const { hasFm, raw } = splitFrontmatter(view.editor.getValue());
+    if (!hasFm) return;
+    const loc = locateFrontmatterKey(raw, issue.key);
+    if (!loc) return;
+    // The raw block starts on document line 1 - line 0 is the opening `---`.
+    const line = loc.line + 1;
+    const from: EditorPosition = { line, ch: loc.valueStart >= 0 ? loc.valueStart : loc.keyStart };
+    const to: EditorPosition = { line, ch: loc.valueEnd >= 0 ? loc.valueEnd : loc.keyEnd };
+    view.editor.setSelection(from, to);
+    view.editor.scrollIntoView({ from, to }, true);
+  }
+
+  /** Apply the one deterministic fix a single finding warrants (from the report
+   *  row's context menu), writing through `vault.process` so the rest of the
+   *  note - and any open editor - is left untouched. Recomputes against the
+   *  freshest content so the edit offsets are valid even if the note changed. */
+  async fixFinding(path: string, issue: LokfIssue): Promise<void> {
+    if (this.blockedOnDevice()) return;
+    const file = this.app.vault.getAbstractFileByPath(path);
+    if (!(file instanceof TFile)) return;
+    let applied = false;
+    await this.app.vault.process(file, (data) => {
+      const parsed = this.parseNote(data);
+      const edit = parsed ? computeFix(issue, data, parsed.data) : null;
+      if (!edit) return data;
+      applied = true;
+      return data.slice(0, edit.from) + edit.text + data.slice(edit.to);
+    });
+    new Notice(applied ? "LOKF: applied 1 safe fix." : "LOKF: no safe fix for this finding.");
+  }
+
+  /** Silence a whole note from the report by writing the opt-out flag into its
+   *  frontmatter (the same key the rule engine reads). The metadata change then
+   *  re-validates it to clean through the incremental path. */
+  async silenceNote(path: string): Promise<void> {
+    if (this.blockedOnDevice()) return;
+    const key = this.settings.ignoreFrontmatterKey.trim();
+    if (!key) {
+      new Notice("LOKF: no per-note opt-out key is configured in settings.");
+      return;
+    }
+    const file = this.app.vault.getAbstractFileByPath(path);
+    if (!(file instanceof TFile)) return;
+    await this.app.fileManager.processFrontMatter(file, (fm: Record<string, unknown>) => {
+      fm[key] = "ignore";
+    });
+    new Notice(`LOKF: silenced this note (${key}: ignore).`);
+  }
+
   async validateActive(file: TFile, notify: boolean): Promise<void> {
+    if (this.isDisabledOnDevice()) {
+      this.setActiveResult(null);
+      if (notify) new Notice("LOKF: disabled on this device - re-enable it in the plugin's settings.");
+      return;
+    }
     if (!this.isConcept(file)) {
       // Leaving the previous note's findings up would attribute them to this one.
       this.setActiveResult(null);
@@ -446,7 +1210,7 @@ export default class LokfPlugin extends Plugin {
     const baseIri = await this.findBaseIriFor(root);
     const content = await this.readOrNull(file);
     if (content === null) {
-      this.setActiveResult({ path: file.path, issues: unreadableIssues() });
+      this.setActiveResult({ path: file.path, issues: applySeverityOverrides(unreadableIssues(), this.settings) });
       if (notify) new Notice("LOKF: could not read this note.");
       return;
     }
@@ -491,9 +1255,11 @@ export default class LokfPlugin extends Plugin {
     if (!leaf) return;
     void this.app.workspace.revealLeaf(leaf);
     if (leaf.view instanceof LokfReportView) {
-      if (this.pendingResults) {
-        leaf.view.setResults(this.pendingResults.results, this.pendingResults.scanned);
-        this.pendingResults = null;
+      // Restore the retained report (kept, not consumed, so a later reopen still
+      // shows it); incremental edits while it was closed are picked up by the
+      // next scan.
+      if (this.lastReport) {
+        leaf.view.setResults(this.lastReport.results, this.lastReport.scanned);
       }
       leaf.view.setActiveResult(this.activeResult);
     }
