@@ -33,15 +33,26 @@ import { computeFix, computeFixes } from "./fixes";
 import { extractBodyLinks, buildProposals, type Proposal } from "./propose";
 import { FindingSuggestModal, type FindingItem } from "./finding-modal";
 import { ConfirmModal } from "./confirm-modal";
+import { FieldReferenceModal } from "./field-modal";
+import { LOKF_FIELD_DOCS } from "./fields";
+import {
+  buildConceptBlock,
+  applyConceptBlock,
+  applyDiataxisBlock,
+  newDiataxisNote,
+  type RelatedLink,
+  type DiataxisEntry,
+} from "./affordances";
 import type { LokfEnforcerApi, LokfFileFindings, LokfFinding } from "./public-api";
 import { ProposeModal } from "./propose-modal";
 
-// Sibling-plugin detection (below, `detectOkfValidator`) is disabled: it read
+// OKF-validator detection (below, `detectOkfValidator`) is disabled: it read
 // `app.plugins`, which is not public API and is a routine flag in community
 // plugin review. Left commented rather than deleted since re-enabling it is a
-// straightforward uncomment should a public "is plugin X installed" API
-// ever appear.
-// const SIBLING_PLUGIN_ID = "okf-enforcer";
+// straightforward uncomment should a public "is plugin X installed" API ever
+// appear. (OKF Enforcer is an alternative validator, not this plugin's sibling -
+// that is LOKF Curator.)
+// const OKF_VALIDATOR_PLUGIN_ID = "okf-enforcer";
 
 /** Not a LOKF rule - a file the vault refused to hand over. Reported rather
  *  than dropped, so an unreadable note can never read as a clean one. */
@@ -77,6 +88,10 @@ function missingBundleRootIssues(root: string): LokfIssue[] {
 interface ParsedNote {
   hasFm: boolean;
   data: Record<string, unknown>;
+  /** The markdown after the frontmatter, present only on the full-content path
+   *  (the scan); absent on the metadata-cache path, where the body-shaped OKF
+   *  checks are skipped. */
+  body?: string;
 }
 
 function arraysEqual(a: string[], b: readonly string[]): boolean {
@@ -89,7 +104,7 @@ export default class LokfPlugin extends Plugin {
   /** Read-only surface for the sibling Curator or an agent; see public-api.ts.
    *  Reachable as `app.plugins.plugins["lokf-enforcer"].api`. */
   api!: LokfEnforcerApi;
-  private siblingNoticeShown = false;
+  private okfValidatorNoticeShown = false;
   private busy = false;
   private hasVerdict = false;
   /** The most recent full scan, retained so reopening the report panel (or the
@@ -258,6 +273,34 @@ export default class LokfPlugin extends Plugin {
       },
     });
     this.addCommand({
+      id: "add-affordances-active",
+      name: "Add Obsidian affordances to the active note",
+      checkCallback: (checking) => {
+        const view = this.app.workspace.getActiveViewOfType(MarkdownView);
+        if (!view || !view.file || view.file.extension !== "md") return false;
+        if (!checking) void this.addAffordancesToNote(view);
+        return true;
+      },
+    });
+    this.addCommand({
+      id: "generate-affordances",
+      name: "Generate Obsidian affordances across the vault",
+      callback: () => void this.generateAffordances(),
+    });
+    this.addCommand({
+      id: "generate-diataxis-map",
+      name: "Generate the Diátaxis map for this bundle",
+      callback: () => void this.generateDiataxisMap(),
+    });
+    this.addCommand({
+      id: "field-reference",
+      name: "Look up a LOKF field",
+      callback: () => {
+        if (this.blockedOnDevice()) return;
+        new FieldReferenceModal(this.app, LOKF_FIELD_DOCS).open();
+      },
+    });
+    this.addCommand({
       id: "go-to-finding",
       name: "Go to a finding (search all findings)",
       callback: () => {
@@ -352,7 +395,7 @@ export default class LokfPlugin extends Plugin {
     this.metaFlush = debounce(() => void this.processPendingMeta(), 400, true);
     this.registerEvent(this.app.metadataCache.on("changed", (file) => this.queueMeta(file.path)));
 
-    this.app.workspace.onLayoutReady(() => this.maybeShowSiblingNotice());
+    this.app.workspace.onLayoutReady(() => this.maybeShowOkfValidatorNotice());
   }
 
   async loadSettings(): Promise<void> {
@@ -374,13 +417,13 @@ export default class LokfPlugin extends Plugin {
         (this.settings as unknown as Record<string, unknown>)[key] = defaults[key];
       }
     }
-    if (typeof saved["siblingNoticeShown"] === "boolean") {
-      this.siblingNoticeShown = saved["siblingNoticeShown"];
+    if (typeof saved["okfValidatorNoticeShown"] === "boolean") {
+      this.okfValidatorNoticeShown = saved["okfValidatorNoticeShown"];
     }
   }
 
   async saveSettings(): Promise<void> {
-    await this.saveData({ ...this.settings, siblingNoticeShown: this.siblingNoticeShown });
+    await this.saveData({ ...this.settings, okfValidatorNoticeShown: this.okfValidatorNoticeShown });
   }
 
   // ---- Device-local disable (H) ----
@@ -430,12 +473,12 @@ export default class LokfPlugin extends Plugin {
    *  stays dependency-free and testable outside Obsidian. Null = unparseable,
    *  which is the installed OKF validator's error to report, not ours. */
   private parseNote(content: string): ParsedNote | null {
-    const { hasFm, raw } = splitFrontmatter(content);
-    if (!hasFm) return { hasFm: false, data: {} };
+    const { hasFm, raw, body } = splitFrontmatter(content);
+    if (!hasFm) return { hasFm: false, data: {}, body };
     try {
       const parsed: unknown = parseYaml(raw);
       const data = parsed && typeof parsed === "object" ? (parsed as Record<string, unknown>) : {};
-      return { hasFm: true, data: applyFieldAliases(data, this.settings.fieldAliases) };
+      return { hasFm: true, data: applyFieldAliases(data, this.settings.fieldAliases), body };
     } catch {
       return null;
     }
@@ -539,7 +582,7 @@ export default class LokfPlugin extends Plugin {
   ): LokfIssue[] {
     const bundlePath = toBundlePath(vaultPath, root);
     const existsInBundle = (p: string): boolean => this.exists(toVaultPath(p, root));
-    return validateLokfConcept(bundlePath, parsed.hasFm, parsed.data, isRoot, baseIri, this.settings, existsInBundle);
+    return validateLokfConcept(bundlePath, parsed.hasFm, parsed.data, isRoot, baseIri, this.settings, existsInBundle, parsed.body);
   }
 
   /** Already-parsed frontmatter from Obsidian's own metadata cache - the same
@@ -856,6 +899,194 @@ export default class LokfPlugin extends Plugin {
       if (changed) noteCount++;
     }
     new Notice(`LOKF: applied safe fixes across ${noteCount} note(s).`);
+  }
+
+  // ---- Obsidian affordances: project LOKF facts into Obsidian conventions ----
+
+  /** The concepts a note's typed relations point at, each with its predicate -
+   *  the predicate-keeping sibling of `outgoingConceptTargets`, used to project
+   *  relations into a "Related" wikilink block. */
+  private outgoingRelations(
+    data: Record<string, unknown>,
+    baseIri: string | null,
+    root: string,
+    selfVaultPath: string,
+    conceptPaths: Set<string>
+  ): { predicate: string; targetPath: string }[] {
+    const bundleSelf = toBundlePath(selfVaultPath, root);
+    const cut = bundleSelf.lastIndexOf("/");
+    const conceptDir = cut > 0 ? bundleSelf.slice(0, cut) : "";
+    const out: { predicate: string; targetPath: string }[] = [];
+    const seen = new Set<string>();
+    const consider = (predicate: string, rawTarget: unknown) => {
+      if (typeof rawTarget !== "string") return;
+      const resolved = resolveRelationTarget(rawTarget, baseIri);
+      if (resolved.kind === "external-iri" || resolved.kind === "malformed") return;
+      const siblingDir = resolved.kind === "internal-relative" ? conceptDir : "";
+      const match = this.matchConcept(resolved.resolvedPath ?? "", siblingDir, root, conceptPaths);
+      if (!match || match === selfVaultPath) return;
+      const key = `${predicate}\u0000${match}`;
+      if (seen.has(key)) return;
+      seen.add(key);
+      out.push({ predicate, targetPath: match });
+    };
+    for (const field of RELATION_FIELDS) {
+      const v = data[field];
+      if (typeof v === "string") consider(field, v);
+      else if (Array.isArray(v)) for (const x of v) consider(field, x);
+    }
+    const relations = data["relations"];
+    if (Array.isArray(relations)) {
+      for (const entry of relations) {
+        if (entry && typeof entry === "object") {
+          const e = entry as { predicate?: unknown; target?: unknown };
+          if (typeof e.predicate === "string" && e.predicate.trim()) consider(e.predicate.trim(), e.target);
+        }
+      }
+    }
+    return out;
+  }
+
+  /** The `RelatedLink`s a concept should carry, resolved to Obsidian's own
+   *  shortest link text for each target. */
+  private relatedLinksFor(
+    file: TFile,
+    data: Record<string, unknown>,
+    baseIri: string | null,
+    root: string,
+    conceptPaths: Set<string>
+  ): RelatedLink[] {
+    const links: RelatedLink[] = [];
+    for (const rel of this.outgoingRelations(data, baseIri, root, file.path, conceptPaths)) {
+      const target = this.app.vault.getAbstractFileByPath(rel.targetPath);
+      if (target instanceof TFile) {
+        links.push({ predicate: rel.predicate, linktext: this.app.metadataCache.fileToLinktext(target, file.path) });
+      }
+    }
+    return links;
+  }
+
+  /** Command: refresh the active concept's managed block - its Diátaxis `#genre`
+   *  tag and "Related" wikilinks - so Obsidian's tag pane, graph, and backlinks
+   *  reflect the note's LOKF facts. */
+  private async addAffordancesToNote(view: MarkdownView): Promise<void> {
+    if (this.blockedOnDevice()) return;
+    const file = view.file;
+    if (!file || !this.isConcept(file) || isReserved(file.path)) {
+      new Notice("LOKF: the active note is not a concept in a configured bundle.");
+      return;
+    }
+    const root = this.resolveRoot(file.path) ?? "";
+    const baseIri = await this.findBaseIriFor(root);
+    const conceptPaths = new Set(this.candidateFiles().filter((f) => !isReserved(f.path)).map((f) => f.path));
+    let touched = false;
+    await this.app.vault.process(file, (doc) => {
+      const parsed = this.parseNote(doc);
+      if (!parsed || !parsed.hasFm) return doc;
+      const links = this.relatedLinksFor(file, parsed.data, baseIri, root, conceptPaths);
+      const genre = typeof parsed.data["genre"] === "string" ? parsed.data["genre"].trim() : "";
+      const next = applyConceptBlock(doc, links, genre || null);
+      if (next === null) return doc;
+      touched = true;
+      return next;
+    });
+    new Notice(
+      touched
+        ? "LOKF: Obsidian affordances updated for this note."
+        : "LOKF: nothing to project - this note has no Diátaxis genre or resolvable relations."
+    );
+  }
+
+  /** Command: across the vault, refresh every concept's affordance block and each
+   *  bundle's Diátaxis map, behind one confirmation - the bulk projection. */
+  private async generateAffordances(): Promise<void> {
+    if (this.blockedOnDevice()) return;
+    const files = this.candidateFiles();
+    const roots = [...new Set(files.map((f) => this.resolveRoot(f.path) ?? ""))];
+    await Promise.all(roots.map((r) => this.findBaseIriFor(r)));
+    const concepts = files.filter((f) => !isReserved(f.path));
+    const conceptPaths = new Set(concepts.map((f) => f.path));
+    // Preview from the metadata cache (frontmatter only, no file reads) so the
+    // confirmation names the notes that will actually change, not every concept.
+    let willWrite = 0;
+    for (const f of concepts) {
+      const parsed = this.parsedFromCache(f);
+      if (!parsed.hasFm) continue;
+      const root = this.resolveRoot(f.path) ?? "";
+      const links = this.relatedLinksFor(f, parsed.data, this.cachedBaseIriFor(root), root, conceptPaths);
+      const genre = typeof parsed.data["genre"] === "string" ? parsed.data["genre"].trim() : "";
+      if (buildConceptBlock(links, genre || null) !== null) willWrite++;
+    }
+    const message = `Project Obsidian affordances onto ${willWrite} concept(s) and refresh the Diátaxis map for ${roots.length} bundle(s)? This edits files in your vault.`;
+    new ConfirmModal(this.app, message, "Generate", () => void this.applyAffordances(concepts, roots)).open();
+  }
+
+  private async applyAffordances(concepts: TFile[], roots: string[]): Promise<void> {
+    const conceptPaths = new Set(concepts.map((f) => f.path));
+    let noteCount = 0;
+    for (const file of concepts) {
+      const root = this.resolveRoot(file.path) ?? "";
+      const baseIri = this.cachedBaseIriFor(root);
+      let changed = false;
+      await this.app.vault.process(file, (doc) => {
+        const parsed = this.parseNote(doc);
+        if (!parsed || !parsed.hasFm) return doc;
+        const links = this.relatedLinksFor(file, parsed.data, baseIri, root, conceptPaths);
+        const genre = typeof parsed.data["genre"] === "string" ? parsed.data["genre"].trim() : "";
+        const next = applyConceptBlock(doc, links, genre || null);
+        if (next === null) return doc;
+        changed = true;
+        return next;
+      });
+      if (changed) noteCount++;
+    }
+    let mapCount = 0;
+    for (const root of roots) if (await this.writeDiataxisMap(root)) mapCount++;
+    new Notice(`LOKF: updated ${noteCount} note(s) and ${mapCount} Diátaxis map(s).`);
+  }
+
+  /** Command: (re)generate the Diátaxis map for the active note's bundle. */
+  private async generateDiataxisMap(): Promise<void> {
+    if (this.blockedOnDevice()) return;
+    const file = this.app.workspace.getActiveFile();
+    if (!file || !this.isConcept(file)) {
+      new Notice("LOKF: open a note in a bundle first to choose which one to map.");
+      return;
+    }
+    const root = this.resolveRoot(file.path) ?? "";
+    await this.findBaseIriFor(root);
+    const wrote = await this.writeDiataxisMap(root);
+    new Notice(wrote ? "LOKF: Diátaxis map updated." : "LOKF: no concepts declare a genre yet, so there is nothing to map.");
+  }
+
+  /** Write or refresh `<root>/diataxis.md` from the bundle's `genre` values.
+   *  Returns whether anything was written; a map is never created empty. */
+  private async writeDiataxisMap(root: string): Promise<boolean> {
+    const mapPath = toVaultPath("diataxis.md", root);
+    const entries: DiataxisEntry[] = [];
+    for (const f of this.candidateFiles()) {
+      if (isReserved(f.path) || f.path === mapPath) continue;
+      if ((this.resolveRoot(f.path) ?? "") !== root) continue;
+      const parsed = this.parsedFromCache(f);
+      if (!parsed.hasFm) continue;
+      const raw = parsed.data["genre"];
+      const genre = typeof raw === "string" ? raw.trim() : "";
+      if (genre) entries.push({ genre, linktext: this.app.metadataCache.fileToLinktext(f, mapPath) });
+    }
+    const existing = this.app.vault.getAbstractFileByPath(mapPath);
+    if (existing instanceof TFile) {
+      let changed = false;
+      await this.app.vault.process(existing, (doc) => {
+        const next = applyDiataxisBlock(doc, entries);
+        if (next === null) return doc;
+        changed = true;
+        return next;
+      });
+      return changed;
+    }
+    if (entries.length === 0) return false;
+    await this.app.vault.create(mapPath, newDiataxisNote(entries));
+    return true;
   }
 
   // ---- Promote body links to typed relations (§9.4) ----
@@ -1272,7 +1503,7 @@ export default class LokfPlugin extends Plugin {
   //     }
   //   ).plugins;
   //   try {
-  //     return !!plugins?.enabledPlugins?.has(SIBLING_PLUGIN_ID) || !!plugins?.plugins?.[SIBLING_PLUGIN_ID];
+  //     return !!plugins?.enabledPlugins?.has(OKF_VALIDATOR_PLUGIN_ID) || !!plugins?.plugins?.[OKF_VALIDATOR_PLUGIN_ID];
   //   } catch {
   //     return false;
   //   }
@@ -1282,13 +1513,13 @@ export default class LokfPlugin extends Plugin {
    *  an OKF validator is already installed (see the commented-out
    *  `detectOkfValidator` above), so this fires unconditionally rather than
    *  only when "not detected". */
-  private maybeShowSiblingNotice(): void {
-    if (!this.settings.recommendSiblingPlugin || this.siblingNoticeShown) return;
+  private maybeShowOkfValidatorNotice(): void {
+    if (!this.settings.recommendOkfValidator || this.okfValidatorNoticeShown) return;
     new Notice(
-      "LOKF Enforcer only checks the LOKF semantic layer. Install an OKF v0.2 validator (e.g. OKF Enforcer) alongside it for full coverage.",
+      "LOKF Enforcer checks the LOKF layer and the OKF v0.2 base layer. A dedicated OKF v0.2 validator (e.g. OKF Enforcer) is an optional alternative for the deeper OKF checks.",
       10000
     );
-    this.siblingNoticeShown = true;
+    this.okfValidatorNoticeShown = true;
     void this.saveSettings();
   }
 

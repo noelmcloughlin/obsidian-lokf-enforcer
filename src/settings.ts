@@ -10,8 +10,8 @@ import { joinCsv, parseCsv, hiddenRootSegment } from "./validator";
 import { SCHEMA_VERSION } from "./vocab";
 
 /** Obsidian's own deep link into the community-plugin browser. Opening it is
- *  the most this plugin ever does about its sibling: the user installs and
- *  enables it themselves, exactly as they would any other plugin. */
+ *  the most this plugin ever does about the alternative OKF validator: the user
+ *  installs and enables it themselves, exactly as they would any other plugin. */
 const OKF_ENFORCER_URI = "obsidian://show-plugin?id=okf-enforcer";
 
 type SettingKey = keyof LokfSettings;
@@ -57,8 +57,8 @@ export class LokfSettingTab extends PluginSettingTab {
   }
 
   /** Persisting goes through the plugin's own saveSettings() rather than the
-   *  inherited write, which would drop the sibling-notice flag stored beside
-   *  the settings. */
+   *  inherited write, which would drop the OKF-validator-notice flag stored
+   *  beside the settings. */
   async setControlValue(key: string, value: unknown): Promise<void> {
     // The device-local flag isn't part of the synced settings object; it is
     // persisted to localStorage through the plugin, which also re-syncs the
@@ -102,7 +102,7 @@ export class LokfSettingTab extends PluginSettingTab {
       },
       {
         type: "group",
-        heading: "Sibling plugin",
+        heading: "Alternative OKF validator",
         items: [
           {
             // There is no public API for "is plugin X installed" (reading
@@ -110,16 +110,16 @@ export class LokfSettingTab extends PluginSettingTab {
             // so this is offered unconditionally rather than only when
             // "not detected".
             name: "Install OKF Enforcer",
-            desc: "Opens OKF Enforcer in Obsidian's community-plugin browser, where you install and enable it yourself. LOKF Enforcer never installs, enables, or calls into another plugin.",
-            aliases: ["sibling", "companion", "OKF v0.2"],
+            desc: "Opens OKF Enforcer in Obsidian's community-plugin browser, where you install and enable it yourself. Optional: LOKF Enforcer now checks the OKF v0.2 base layer itself, so a dedicated validator is an alternative, not required. LOKF Enforcer never installs, enables, or calls into another plugin. (Not to be confused with LOKF Curator, this plugin's sibling.)",
+            aliases: ["OKF Enforcer", "alternative", "OKF validator", "OKF v0.2"],
             action: () => {
               window.open(OKF_ENFORCER_URI);
             },
           },
           {
             name: "Recommend installing an OKF validator",
-            desc: "Show a one-time notice, on first opening this vault, recommending an OKF v0.2 validator (e.g. OKF Enforcer).",
-            control: { type: "toggle", key: "recommendSiblingPlugin" },
+            desc: "Show a one-time notice, on first opening this vault, recommending a dedicated OKF v0.2 validator. Off by default now that LOKF Enforcer covers the OKF v0.2 base layer itself.",
+            control: { type: "toggle", key: "recommendOkfValidator" },
           },
         ],
       },
@@ -198,11 +198,29 @@ export class LokfSettingTab extends PluginSettingTab {
       },
       {
         type: "group",
+        heading: "OKF v0.2 base layer",
+        items: [
+          {
+            name: "Check the OKF v0.2 base layer",
+            desc: "Also check the OKF v0.2 rules the LOKF schema already subsumes: a required type on every concept, the Attested Computation contract shape, reserved index.md/log.md structure, and v0.1 to v0.2 migration hints. On by default so a bundle stays checkable with no separate OKF validator; turn off if a dedicated OKF v0.2 validator already covers these. Severity follows the spec: what OKF marks REQUIRED/MUST is an error, the rest a warning.",
+            aliases: ["OKF", "type", "attested computation", "index", "log", "migration", "timestamp"],
+            control: { type: "toggle", key: "checkOkfBaseLayer" },
+          },
+          {
+            name: "Enforce OKF conformance as errors",
+            desc: "Not recommended - a break-glass escape hatch. On by default. Turning it off downgrades the OKF-required violations (a missing type, an Attested Computation with no runtime, a non-root index.md with frontmatter, a non-ISO log.md date heading, a missing generated.by or source resource) from errors to warnings, so a bundle that isn't OKF-conformant stops being flagged as broken. Use it only to unblock temporarily (e.g. mid-migration, or to work around a data issue) while you fix the data, then turn it back on. LOKF's own structural errors (base_iri, Field/Distribution) are unaffected.",
+            aliases: ["conformance", "mandatory", "required", "MUST", "downgrade", "break glass", "migration"],
+            control: { type: "toggle", key: "enforceOkfConformance" },
+          },
+        ],
+      },
+      {
+        type: "group",
         heading: "Trust and lifecycle (OKF v0.2 §5)",
         items: [
           {
             name: "Check trust/lifecycle field shapes",
-            desc: "Validate the shape of the §5 fields a bundle actually uses (verified/generated actors, status, stale_after, sources) - the substrate LOKF's curation ceremony stands on. Never fires on a bundle that carries no §5 fields; deeper credibility/tier interpretation is an installed OKF validator's job.",
+            desc: "Validate the shape of the §5 fields a bundle actually uses (verified/generated actors, status, stale_after, sources). Shape only, never the trust-tier or credibility verdict. The two fields OKF marks REQUIRED - generated.by and a source's resource - are errors (relaxable via Enforce OKF conformance); the rest are warnings. Never fires on a bundle that carries no §5 fields.",
             aliases: ["verified", "generated", "status", "stale_after", "provenance", "ceremony"],
             control: { type: "toggle", key: "checkTrustShape" },
           },

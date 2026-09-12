@@ -13,7 +13,7 @@
 - [ ] `npm run smoke-test` passes (the `validator.ts` rule set against its fixtures)
 - [ ] Anything needing a real Obsidian `App` (vault scan, bundle-root resolution, the scaffold command) was checked by hand in a real vault - there is no headless Obsidian to test it in
 - [ ] `CHANGELOG.md` updated under `[Unreleased]` if this changes plugin behavior
-- [ ] If `.lokf/` changed, `uv run lokf validate .lokf/knowledge` passes (todo: justfile)
+- [ ] If `.lokf/` changed, `cd .lokf; uv run lokf validate knowledge` passes (todo: justfile)
 
 ## AI Assistance
 

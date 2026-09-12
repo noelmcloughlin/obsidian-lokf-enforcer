@@ -37,6 +37,9 @@ export interface LokfVocabManifest {
   fieldTypes: string[];
   conceptStatuses: string[];
   subsets: string[];
+  /** Field-slot descriptions for the "Look up a LOKF field" reference; optional
+   *  so an older manifest without them still validates (fields.ts falls back). */
+  slots?: { name: string; description: string }[];
 }
 
 function stringArray(value: unknown): string[] | null {

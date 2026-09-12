@@ -4,103 +4,96 @@ All notable changes to this project are documented here. The format is based on 
 
 No version below has been published as a GitHub release yet, so entries describe development history against `main`, not user-facing upgrades. No tags exist yet either, which is why version headings carry no compare links.
 
-## [0.4.0] - 2026-09-11
+## [0.4.0] - 2026-09-12
 
 ### Added
 
-- **Inline diagnostics** (Settings → In-editor diagnostics, on): a CodeMirror 6 extension underlines the offending frontmatter value as you type - wavy red for errors, amber for warnings - with the finding on hover. Reads its file via `editorInfoField`, pulls findings back synchronously; two rules on one value merge into one underline.
-- **Jump-to-line from the report**: every finding row is clickable and keyboard-operable, opening the note with the cursor on the offending key (its value selected). Synthetic bundle-level rows stay inert.
-- **Key anchors on findings** (`base_iri`, `publisher.type`, `relations[2].target`, …) - the prerequisite for the underline and jump. New import-free, Node-tested `src/locator.ts` maps a key path to its line/column in the raw frontmatter, with graceful fallback.
-- **Incremental re-validation**: editing a note re-checks just that note from the metadata cache instead of a full rescan; a root `index.md` re-checks its bundle only when `base_iri` changes; deletes/renames patch the panel in place. Coalesced across keystroke bursts via `metadataCache.on("changed")`.
-- **Schema-derived vocabulary manifest** (`src/lokf-vocab.json`, `npm run build-vocab` from a pinned `lokf.yaml`): the default type/predicate/genre vocabulary is now derived from the LOKF schema and refreshes on upgrade for any list you haven't customised - adding the `Role` type and the full 15-value `RelationType`. Bundled as static data with fallback to the built-in constants; `validator.ts` stays import-free.
-- **Concept graph + quick-switcher**: an in-memory index of each concept's type, id, resolved relation targets, and inverse links. Two commands - "Find a concept" (a keyboard-first `SuggestModal` showing type + in/out counts) and "Find an orphan concept". Built on demand from the cache, reusing the relation check's own resolution; import-free `src/graph.ts`.
-- **Trust/lifecycle shape checks (OKF v0.2 §5)**: when a bundle uses them, validates the *shape* of `verified`/`generated` (well-formed `{ by, at }` with an OKF §7 actor), `status`, `stale_after`, and `sources` - never their credibility *depth* (an OKF validator's job). All warnings, nothing fires without §5 fields, on-by-default toggle.
-- **Frontmatter value autocomplete**: an `EditorSuggest` for `type`/`genre`/`status`/predicate values and relation targets (from the graph), with aliases/notes from the manifest. Never suggests key names; on-by-default toggle. Import-free `src/suggest-context.ts`.
-- **Safe quick-fixes** (command "Fix safe issues in the active note"): applies every deterministic correction in one undo step - append a missing `base_iri` terminator, rewrite a known type alias to its canonical class, and turn a bare-string relation into a one-item list. Format-preserving edits from the finding's key anchor; never guesses an owned value (base_iri authority, publisher). Import-free `src/fixes.ts`. A vault-wide **"Fix safe issues across the vault"** command applies the same fixes to every note in one pass, behind a confirmation.
-- **Promote body links to typed relations** (command): finds body links resolving to another concept and guesses a typed relation from the surrounding sentence (cue-phrase table, adjacency boost, `relatedTo` fallback), modelled on `lokf propose`. A review dialog confirms each before writing via `processFrontMatter`; code/image/external/already-asserted links are skipped. Import-free `src/propose.ts`.
-- **Per-note opt-out** (Settings → Scope and performance, key default `lokf`): `lokf: ignore` (or `true`/`yes`/`on`/`skip`) silences a note entirely while it stays a concept in the graph. An allow-list, not general truthiness; blank the key to turn it off. (`isIgnoredByFrontmatter`.)
-- **Disable on this device** (Settings → This device): a device-local switch (via `loadLocalStorage`/`saveLocalStorage`, never synced) that silences the status bar, inline underlines, autocomplete, incremental re-validation, scanning, and every explicit command - so a phone-synced vault can turn the plugin off there.
-- **Per-rule severity escalation** (Settings → Rule severity): a list of rule ids whose warnings become errors, for stricter gating. Escalation only - a default error is never downgraded - applied uniformly, including synthetic bundle-level findings. (`applySeverityOverrides`.)
-- **Report filter + finding navigation**: a filter box narrows the list as you type (plain text, `sev:error`, `rule:lokf/2`, ANDed, debounced); three commands ride the same predicate - "Go to a finding" (`SuggestModal`) and go-to-next/previous - each jumping to the offending key. Import-free `src/report-filter.ts`.
-- **Report context menu, finding grouping, render caps**: right-click a finding for Copy message / Open / Fix this finding / Silence this note; a file's findings group under their top-level key when they span several; the panel caps at 300 files and 100 findings/file with a "use the filter" hint.
-- **Ribbon icon** to open the report, and the last scan is retained so reopening restores it without a rescan.
-- **Read-only public API** at `app.plugins.plugins["lokf-enforcer"].api`: `getReport()`, `validatePath(path)` (read-only), and `onValidated(cb)`. A dependency-free `src/public-api.ts` with its own stable `LokfFinding` shape - offered, never required.
-- **Field aliasing** (Settings → Field aliasing (advanced), off): `user=canonical` pairs (e.g. `depends_on=dependsOn`) rename a vault's own keys onto the LOKF ones before validation, so a non-canonical vault can still be checked. Applied at the parse boundary (validation, graph, and autocomplete all see canonical keys); copy-on-write. (`applyFieldAliases`.)
-- **Node-tested throughout**: the locator, vocabulary manifest, concept graph, §5 shape checks, autocomplete context, safe fixes, body-link promotion, per-note opt-out, severity escalation, report filter, finding grouping, and field aliasing all carry smoke-test coverage.
+- **OKF v0.2 base layer** (`checkOkfBaseLayer`, on by default): checks the plain-OKF v0.2 rules LOKF subsumes (required `type`, Attested Computation shape, `index.md`/`log.md` structure, v0.1→v0.2 migration hints), so a bundle stays checkable without a separate OKF validator. Severity follows the spec (REQUIRED/MUST → error); a settings toggle can downgrade those to warnings mid-migration.
+- **Look up a LOKF field** (command): searchable reference of frontmatter fields, sourced from the schema's own slot definitions so wording never forks.
+- **Generate Obsidian affordances**: three commands projecting LOKF facts into Obsidian conventions - `#genre` tags and `## Related` wikilinks in a managed block, plus a `diataxis.md` Map of Content. Idempotent, marker-delimited.
+- **Inline diagnostics**: CodeMirror 6 extension underlines offending frontmatter values (wavy red/amber) with the finding on hover.
+- **Jump-to-line from the report**: finding rows are clickable, opening the note with the cursor on the offending key.
+- **Key anchors on findings**: new `src/locator.ts` maps a key path to its line/column in raw frontmatter (prerequisite for underlines/jump).
+- **Incremental re-validation**: editing a note re-checks just that note from the metadata cache instead of a full rescan.
+- **Schema-derived vocabulary manifest** (`src/lokf-vocab.json`, `npm run build-vocab`): default type/predicate/genre vocabulary now derives from the LOKF schema, adding `Role` and the full 15-value `RelationType`.
+- **Concept graph + quick-switcher**: in-memory index of each concept's type/id/relations, plus "Find a concept" and "Find an orphan concept" commands.
+- **Trust/lifecycle shape checks (OKF v0.2 §5)**: validates the shape of `verified`/`generated`, `status`, `stale_after`, `sources` - never their credibility depth. All warnings, on by default.
+- **Frontmatter value autocomplete**: `EditorSuggest` for `type`/`genre`/`status`/predicate values and relation targets.
+- **Safe quick-fixes** (command + vault-wide variant): applies deterministic corrections (missing `base_iri` terminator, type aliases, bare-string relations) in one undo step; never guesses owned values.
+- **Promote body links to typed relations** (command): guesses a typed relation for body links resolving to another concept, confirmed via a review dialog before writing.
+- **Per-note opt-out**: `lokf: ignore` frontmatter key silences a note while it stays a concept in the graph.
+- **Disable on this device**: device-local switch (never synced) that silences the plugin entirely on one device.
+- **Per-rule severity escalation**: settings list of rule ids whose warnings become errors; escalation only, never downgrades.
+- **Report filter + finding navigation**: filter box (`sev:error`, `rule:lokf/2`, ANDed, debounced) plus go-to-next/previous commands.
+- **Report context menu, finding grouping, render caps**: right-click actions, grouping by top-level key, and a 300-file/100-finding-per-file cap with a filter hint.
+- **Ribbon icon** to open the report; last scan is retained across reopens.
+- **Read-only public API** at `app.plugins.plugins["lokf-enforcer"].api`: `getReport()`, `validatePath(path)`, `onValidated(cb)`.
+- **Field aliasing** (advanced, off by default): `user=canonical` pairs rename a vault's own keys onto LOKF ones before validation.
+- **Node-tested throughout**: locator, vocabulary manifest, concept graph, §5 checks, autocomplete, safe fixes, body-link promotion, opt-out, severity escalation, report filter, grouping, and field aliasing all carry smoke-test coverage.
 
 ### Changed
 
-- **Severity icons in the report** via `setIcon` (a triangle for a warning, a circle for an error) instead of the spelled-out word, with the severity still on an `aria-label`.
-- **Keyboard-operable collapse/expand** in the report: folder headers and per-file carets carry `role="button"`, `aria-expanded`, Enter/Space, and a focus ring.
-- **Aligned three rules with upstream LOKF PR [#69](https://github.com/nicholsn/lokf/pull/69)**: a `base_iri` may end in `#` as well as `/`; the `verified`/`generated` `by` actor check matches the schema's exact pattern (stricter than a source's `author`); `http_method` is no longer a recommended-field warning on a `Service`.
-- `@codemirror/state`/`@codemirror/view` are devDependencies (types only; external at runtime).
+- Severity icons in the report via `setIcon` instead of spelled-out words.
+- Keyboard-operable collapse/expand in the report (`role="button"`, `aria-expanded`, Enter/Space, focus ring).
+- Aligned three rules with upstream LOKF PR [#69](https://github.com/nicholsn/lokf/pull/69): `base_iri` may end in `#`; the `by` actor check matches the schema's exact pattern; `http_method` is no longer a recommended-field warning on a `Service`.
+- `@codemirror/state`/`@codemirror/view` moved to devDependencies (types only; external at runtime).
 - `tsconfig.json` enables `resolveJsonModule` for the bundled vocabulary manifest.
 
 ## [0.3.0] - 2026-09-11
 
 ### Added
 
-- **Bundle root folders**: a vault can now hold several independent bundles as sibling project folders instead of one bundle per vault. Each configured folder gets its own `index.md`, `base_iri`, and minted/checked ids and relations; notes outside every configured folder aren't scanned. A misconfigured root (inside a dot-folder, renamed, or deleted) is reported rather than silently producing an empty "clean" bundle.
-- The scaffold command targets whichever bundle the active note belongs to, and asks instead of guessing when several bundles are configured and none is open.
-- A settings shortcut opens OKF Enforcer in Obsidian's community-plugin browser. Considered detecting whether it's already installed via `app.plugins`, and rejected that - not public API, and a routine flag in community-plugin review - so the shortcut and the one-time "install a validator" notice are both shown unconditionally instead.
-- Unit tests for the bundle-resolution logic, extracted into plain, Obsidian-free functions so it runs under plain Node instead of needing a real vault to exercise.
-- Golden-fixture bundle checks in `npm run smoke-test`: the full rule set runs over a frozen scaffolding-template skeleton and this repo's own `.lokf/knowledge/`, asserting zero errors; point `LOKF_EXTRA_BUNDLE` at another bundle to check it too.
-- This repo's own `.lokf/knowledge/` bundle is maintained by `lokf-agent-skills` installed at run time rather than committed, matching their hygiene guidance; CI installs the librarian skill pinned to a tagged release. No skill is a plugin dependency.
-- README rewritten: framing shared with `lokf-agent-skills`, a "Where this fits" section placing the plugin on the four-tier trust model with an explicit no-dependency statement, an Install section, a repo layout, and Credits.
-- `lint-and-docs.yaml`: a static-checks workflow covering the shell, workflows, and prose this repo ships - ShellCheck, `actionlint`, markdownlint, `lychee` link-checking (configured in `lychee.toml`), and codespell - on every push and PR plus a weekly schedule, so link rot surfaces without waiting for an incidental PR. Backported from `lokf-agent-skills`'s `validate.yml`.
-- `.markdownlint-cli2.jsonc`, adopted from `lokf-agent-skills`: five rules disabled for reasons specific to this content (unwrapped prose, frontmatter `title:` reading as an implicit H1, adjacent callouts, template placeholder tokens, insertable fragments) and `MD024` scoped to `siblings_only` so Keep a Changelog's repeated category headings pass while real duplicates still fail. This repo additionally ignores `node_modules/` and the run-time-installed `.agents/`/`.claude/` skill directories, none of which exist in the repo it came from.
-- `.github/dependabot.yml`: weekly updates for the pinned action SHAs, the plugin's npm devDependencies (grouped into one PR), and the `.lokf/` sidecar's Python toolchain. The SHA-pinning convention used across every workflow goes stale silently otherwise - `actionlint` catches syntax drift, not staleness.
-- `AI_COVENANT.md`, adopted from `lokf-agent-skills`: contributors own what they submit regardless of which tools helped write it, AI may support but not proxy discussion participation, and repository-owned agents (this repo's scheduled `knowledge-librarian`) commit under a bot identity, always via a reviewable PR, and may never record a human verdict a person didn't actually give. Referenced from `CONTRIBUTING.md`, the PR template, and both issue templates.
-- `.github/pull_request_template.md`: a scope checkbox, the pre-PR checklist in short form (including the reminder that anything needing a real Obsidian `App` has no automated test), and the AI-assistance clause.
-- `CODE_OF_CONDUCT.md` (Contributor Covenant 2.1), shared verbatim with `lokf-agent-skills` so both repositories hold contributors to one standard. Linked from `README.md` and `CONTRIBUTING.md`.
-- README gained a Contributing section pointing at the contributing guide, the code of conduct, and the AI covenant.
+- **Bundle root folders**: a vault can hold several independent bundles as sibling project folders instead of one bundle per vault; a misconfigured root is reported rather than silently producing an empty "clean" bundle.
+- Scaffold command targets the active note's bundle, asking when several are configured and none is open.
+- Settings shortcut to install OKF Enforcer from the community-plugin browser.
+- Unit tests for bundle-resolution logic, extracted into plain Obsidian-free functions.
+- Golden-fixture bundle checks in `npm run smoke-test` against a frozen scaffolding template and this repo's own `.lokf/knowledge/`.
+- This repo's `.lokf/knowledge/` bundle is now maintained by `lokf-agent-skills` installed at run time rather than committed.
+- README rewrite: trust-model framing shared with `lokf-agent-skills`, install section, repo layout, credits.
+- `lint-and-docs.yaml`: ShellCheck, `actionlint`, markdownlint, `lychee` link-checking, and codespell on every push/PR plus weekly.
+- `.markdownlint-cli2.jsonc` adopted from `lokf-agent-skills`, with `MD024` scoped to `siblings_only` so Keep a Changelog headings pass.
+- `.github/dependabot.yml`: weekly updates for pinned action SHAs, npm devDependencies, and the `.lokf/` sidecar's Python toolchain.
+- `AI_COVENANT.md`, `CODE_OF_CONDUCT.md` (Contributor Covenant 2.1), and a PR template scope checkbox/checklist, all shared with `lokf-agent-skills`.
 
 ### Changed
 
-- The scaffold command now writes `publisher.id` as `person/<slug>` to agree with `type: Person` (previously `org/<slug>`).
-- README's Usage section explains that the vault root is the bundle root by default, and that a `.lokf/knowledge/` bundle must be opened as its own vault - Obsidian never exposes dot-folders to any plugin.
-- `llms.txt` and the README explain how to weigh a draft concept against a human-confirmed one.
-- `CONTRIBUTING.md` documents the PR-based release flow and asks for Node 20+.
-- Internal cleanup: type-vocabulary lookups are cached instead of rebuilt per note; `version-bump.mjs` only ever adds a version, never rewrites one already recorded.
-- Renamed `knowledge-validate.yaml` to `knowledge-registrar.yaml`, matching the rename upstream in `lokf-agent-skills` v0.12.0: the workflow keeps the bundle's records well-formed and provenanced, and never judges whether their content is true - that is the curator's job. Cross-references in `SECURITY.md`, `CONTRIBUTING.md`, `lint-and-docs.yaml`, and the bundle's own concepts were updated to match.
-- README now names the registrar gate directly, mirroring the "fifth role" paragraph in `lokf-agent-skills`'s own README: the plugin works the registrar's desk inside Obsidian, and `knowledge-registrar.yaml` staffs the same desk in CI - neither reaching a verdict of its own. This keeps the registrar theme consistent across both projects' READMEs.
-- `.lokf/README.md`'s directory tree lists the quality-gates playbook and the `scripts/` wrapper directory, both of which it had grown without recording.
-- `SECURITY.md` now inventories every workflow (including the lint-and-docs and registrar gates and the librarian's wrapper script), describes the librarian's two-job privilege split and the blast radius if a prompt-injection guard fails, states the `.lokf/feedback.md` guard explicitly, and records why CodeQL is deliberately not enabled while Dependabot covers dependency review.
-- `CONTRIBUTING.md` gained the CI gates contributors trip most often, the Dependabot note, a "Using AI tools" section pointing at the covenant, and an explanation of why a fresh clone shows "Failed to load plugin" until `npm run build` has produced the git-ignored `main.js`.
-- `.markdownlint-cli2.jsonc` disables `MD060` (table column style): it flags the padded-header/bare-separator table style used everywhere in this repo (and on GitHub generally) as inconsistent, and no `style` setting reconciles the two without just relocating which row gets flagged. `.lokf/README.md`'s concept checklist gained a reminder not to let a spaced dash wrap onto its own line, since Markdown reads that as a list item (`MD032`) - the actual mistake that prompted this entry.
+- Scaffold command writes `publisher.id` as `person/<slug>` to agree with `type: Person` (was `org/<slug>`).
+- README/CONTRIBUTING clarify bundle-root defaults, PR-based release flow, and Node 20+ requirement.
+- Type-vocabulary lookups are cached instead of rebuilt per note.
+- Renamed `knowledge-validate.yaml` to `knowledge-registrar.yaml`, matching upstream `lokf-agent-skills` v0.12.0; cross-references updated across docs.
+- `SECURITY.md` now inventories every workflow and the librarian's privilege split.
+- `.markdownlint-cli2.jsonc` disables `MD060` (padded-header/bare-separator tables used throughout this repo).
 
 ### Fixed
 
-- An unreadable note was silently dropped mid-scan and still counted as "scanned", so a vault could report clean while files went unchecked. Unreadable notes now get their own report row and are counted separately.
-- An unreadable root `index.md` no longer aborts an entire scan, and the scaffold command now refuses to write when it can't first read the file (previously it could overwrite the file's contents).
-- The knowledge-librarian's prompt-building script executed parts of its own prompt as shell commands due to an unescaped heredoc; re-scaffolded from the current template.
-- `.lokf/knowledge/` drift against the source it documents: two concepts described a fourth command (`check-sibling-plugin`) that does not exist - sibling detection via `app.plugins` is commented out, so the recommendation notice fires unconditionally rather than only when absent - and one attributed the scan's batching to `report-view.ts` rather than `main.ts`, where the batch size is the configurable `batchSize` setting. `README.md` had been correct throughout; only the bundle had drifted.
-- A stale, frontmatter-free planning document under `.lokf/knowledge/` crashed `lokf validate` for the entire bundle rather than failing gracefully on that one file; removed, and the `lint-and-docs`/registrar gates now cover what it was tracking.
-- `CONTRIBUTING.md`'s layout table no longer lists sibling detection as a `main.ts` responsibility, and two typos in the pre-PR checklist are corrected.
-- **`LOFK` -> `LOKF`** in the plugin description carried by `manifest.json`, `package.json`, and `community-plugin-entry.json` - a transposition in the public-facing blurb Obsidian's community-plugin browser shows, and in the entry submitted to the plugin directory. The `codespell` gate only scans `**/*.md`, so no CI check covered it.
-- Markdown that the new `lint-and-docs` gate would have failed on: a bare URL in `SECURITY.md`, an unlabelled code fence in `.lokf/README.md`, and missing blank lines around headings and lists throughout `CHANGELOG.md`, the bundle's `log.md`, and the bug-report template.
-- A folder in **Excluded folders** written with a trailing slash, a leading slash, surrounding whitespace, or a `./` prefix - the natural ways to type one - silently excluded nothing at all; only the exact bare spelling worked. Now normalized the same way **Bundle root folders** already was.
-- **Base_iri authority check** compared `URL.host` (which includes `:port`) against the denylist, so `https://github.com:8080/...` passed as a controlled namespace though `https://github.com/...` correctly failed. Now compares `hostname`.
-- A relation field (`dependsOn`, `references`, `sameAs`, and the other eight from Golden Rule 4) written as a bare scalar - `dependsOn: <iri>`, not a list - passed validation clean, even though the generated LOKF schema requires an array for all ten and real `lokf validate` fails it. This is the same bug class the 2026-09-09 bundle audit found and fixed in this repo's own concepts (see `.lokf/knowledge/log.md`); the plugin itself never caught it. Now warned, naming the field and showing the list form.
-- `type` set to a number, boolean, list, or mapping produced no finding at all - indistinguishable from a genuinely missing `type`, which is silent by design (that's the installed OKF validator's error to raise). A list or mapping now gets its own shape warning; a coercible scalar (`type: 123`) reads as text and hits the ordinary "not in the vocabulary" warning, exactly like an unrecognized string would.
-- **Validate active note** (the command, and the status-bar click) went completely silent - no notice, status bar cleared to `LOKF: —` - when run on a note excluded by settings or outside every configured bundle root, despite the command being enabled for any Markdown file. Every other outcome (clean, unreadable, N findings) already produced a Notice; this is the one case where the user most needed to be told why nothing happened.
-- The report panel's **"N clean"** count subtracted every row in the results list from the scanned-file count, including bundle-level findings (no root `index.md`, a hidden or missing bundle-root folder) that were never one of the scanned files to begin with - undercounting "clean" by however many such findings a scan produced.
-- Four tables (`README.md`, `CONTRIBUTING.md`, and two bundle concepts) paired a padded header with a bare `|---|` separator row, which `MD060` (new in the markdownlint version `lint-and-docs.yaml` actually pins) treats as inconsistent; `bug_report.md`'s first real heading skipped from h1 straight to h3 (`MD001`); and a spaced dash used as punctuation in `scheduled-librarian.md` happened to wrap onto its own line, which Markdown reads as a list item (`MD032`) on a paragraph that was never meant to be one.
+- An unreadable note was silently dropped mid-scan yet still counted as "scanned"; now gets its own report row and separate count.
+- An unreadable root `index.md` no longer aborts an entire scan; scaffold command refuses to write when it can't read the file first.
+- The knowledge-librarian's prompt-building script executed part of its own prompt as shell commands due to an unescaped heredoc; re-scaffolded.
+- `.lokf/knowledge/` drift: two concepts described a nonexistent command, one misattributed scan batching to the wrong file.
+- A stale, frontmatter-free planning doc under `.lokf/knowledge/` crashed `lokf validate` for the whole bundle; removed.
+- **`LOFK` -> `LOKF`** transposition fixed in `manifest.json`, `package.json`, and `community-plugin-entry.json`.
+- A folder in **Excluded folders** written with a trailing/leading slash, whitespace, or `./` prefix silently excluded nothing; now normalized like **Bundle root folders**.
+- **Base_iri authority check** compared `URL.host` (includes `:port`) against the denylist, so a ported hostname bypassed it; now compares `hostname`.
+- A relation field written as a bare scalar instead of a list passed validation clean even though the schema requires an array; now warned.
+- `type` set to a number, boolean, list, or mapping produced no finding at all; a list/mapping now gets its own shape warning.
+- **Validate active note** went completely silent when run on an excluded or out-of-bundle note; now always produces a Notice.
+- The report panel's **"N clean"** count undercounted by subtracting bundle-level findings that were never scanned files to begin with.
+- Various markdownlint fixes (`MD060` tables, `MD001` heading skip, `MD032` spaced-dash-as-list-item).
 
 ### Security
 
-- `release.yml` now passes the pushed tag through the environment instead of interpolating it into a shell command, closing a script-injection path through a crafted tag name.
-- `knowledge-librarian.yaml` no longer runs a repository variable's content as a shell command; it always runs a pinned wrapper script and fails the job if the agent writes outside `.lokf/knowledge/`. Both bundle workflows gained hardened-runner auditing and least-privilege permissions.
-- `knowledge-librarian.yaml` is split into two jobs so the agent and the write-scoped token never meet: `refresh` runs the agent - third-party code - under `contents: read` with `persist-credentials: false` and hands its proposed change to `publish` as a patch artifact; only `publish`, which runs no agent code, holds `contents: write` / `pull-requests: write`. A compromised agent can no longer reach a write credential at all, rather than being caught after using one. Ported from `lokf-agent-skills` v0.11.0.
-- `knowledge-librarian.sh` parses `AGENT_CLI` into a quoted argv array instead of expanding it unquoted at the command position, so shell metacharacters in that value are passed as inert arguments - there is no `eval` and no `bash -c`. The previous form suppressed the ShellCheck warning (`SC2086`) that names exactly this. The wrapper also enforces the bundle boundary itself after the agent returns, so the "edit only the bundle" contract is now checked twice by two independent mechanisms.
-- The scheduled librarian run is armed by a dedicated `KNOWLEDGE_LIBRARIAN_ENABLED` repository variable rather than inferred from `AGENT_CLI` being set, so an agent command can be staged without going live.
+- `release.yml` passes the pushed tag through the environment instead of interpolating it into a shell command, closing a script-injection path.
+- `knowledge-librarian.yaml` no longer runs a repository variable's content as a shell command; runs a pinned wrapper script and fails if the agent writes outside `.lokf/knowledge/`.
+- `knowledge-librarian.yaml` split into two jobs so the agent and the write-scoped token never meet: `refresh` (read-only, third-party code) hands a patch artifact to `publish` (no agent code, holds write access). Ported from `lokf-agent-skills` v0.11.0.
+- `knowledge-librarian.sh` parses `AGENT_CLI` into a quoted argv array instead of expanding it unquoted, closing a shell-injection path (`SC2086`).
+- The scheduled librarian run is armed by a dedicated `KNOWLEDGE_LIBRARIAN_ENABLED` repository variable rather than inferred from `AGENT_CLI` being set.
 
 ## [0.2.0] - 2026-09-08
 
 ### Added
 
 - `.lokf/knowledge/`: this plugin's own self-documenting knowledge bundle.
-- `release.yml` verifies the pushed tag matches `manifest.json`'s version before building, so a mistagged push fails fast instead of publishing a release Obsidian's installer can never find.
+- `release.yml` verifies the pushed tag matches `manifest.json`'s version before building.
 
 ### Security
 
