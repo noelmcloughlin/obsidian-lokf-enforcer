@@ -1,16 +1,21 @@
-// validator.ts - the LOKF semantic-layer rules.
+// validator.ts - the LOKF semantic-layer rules, plus the OKF v0.2 base layer.
 //
 // Deliberately import-free: no Obsidian, no YAML parser. Callers hand in
-// already-parsed frontmatter, so this module runs unchanged under Obsidian and
-// under plain Node (see scripts/smoke-test.ts). Everything OKF v0.2 already
-// covers - required `type`, `Attested Computation` shape, index.md/log.md
-// structure - is deliberately NOT re-implemented here; that is the installed
-// OKF validator's job. The one exception is the OKF v0.2 §5 trust/lifecycle
-// fields (verified/generated/status/stale_after/sources): their *shape* is
-// checked here (Golden Rule 5, below), because they are defined in the LOKF
-// schema and are the substrate LOKF's curation ceremony stands on - but their
-// credibility *depth* and trust-tier interpretation is still an OKF
-// validator's job, never this file's.
+// already-parsed frontmatter (and, when they have it, the note body), so this
+// module runs unchanged under Obsidian and under plain Node (see
+// scripts/smoke-test.ts).
+//
+// This file owns two layers. The LOKF semantic layer (Golden Rules 2-5) is the
+// stricter dialect: the bundle header, base_iri, the type vocabulary, typed
+// relationships, id minting, and the *shape* of the OKF v0.2 §5 trust/lifecycle
+// fields. On top of that it also checks the OKF v0.2 *base layer* the LOKF
+// schema already subsumes - the required `type` (§11), the `Attested
+// Computation` contract shape (§10), reserved index.md/log.md structure
+// (§8/§9), and the v0.1->v0.2 migration hints (§13) - gated behind
+// `checkOkfBaseLayer` so a vault that runs a dedicated OKF validator can turn it
+// off. These are the `okf/*` rules; absorbing them keeps a bundle checkable even
+// when no separate OKF validator is installed or maintained. Credibility *depth*
+// and trust-tier interpretation stay out of scope - a signal, not a verdict.
 
 export type LokfSeverity = "error" | "warning";
 
@@ -44,6 +49,18 @@ export interface LokfSettings {
    *  bundle that carries no §5 fields; deeper credibility/tier interpretation
    *  stays an installed OKF validator's job. */
   checkTrustShape: boolean;
+  /** Check the OKF v0.2 base layer the LOKF schema already subsumes - required
+   *  `type` (§11), the Attested Computation contract shape (§10), reserved
+   *  index.md/log.md structure (§8/§9), and v0.1->v0.2 migration hints (§13).
+   *  On by default so a bundle stays checkable with no separate OKF validator;
+   *  turn off when a dedicated OKF v0.2 validator already covers these. */
+  checkOkfBaseLayer: boolean;
+  /** When on (default), the OKF v0.2 rules the spec marks REQUIRED/MUST are
+   *  reported as errors. When off, those specific findings are downgraded to
+   *  warnings - a temporary escape hatch (e.g. mid-migration) that keeps them
+   *  visible without blocking. Only the OKF-required findings are affected;
+   *  LOKF's own structural errors (base_iri, Field/Distribution) are untouched. */
+  enforceOkfConformance: boolean;
   /** The lifecycle values `status` may take, from the LOKF schema. */
   conceptStatuses: string[];
   /** A note whose frontmatter sets this key to a truthy opt-out value (e.g.
@@ -64,7 +81,7 @@ export interface LokfSettings {
   fieldAliases: string[];
   excludeFolders: string[];
   batchSize: number;
-  recommendSiblingPlugin: boolean;
+  recommendOkfValidator: boolean;
   /** Underline offending frontmatter values inline, in the editor, with the
    *  finding on hover - the live counterpart to the side report. Off leaves
    *  the editor untouched and the panel the only surface. */
@@ -149,13 +166,15 @@ export const DEFAULT_SETTINGS: LokfSettings = {
   warnMissingHeader: true,
   checkRelationTargets: true,
   checkTrustShape: true,
+  checkOkfBaseLayer: true,
+  enforceOkfConformance: true,
   conceptStatuses: DEFAULT_CONCEPT_STATUSES,
   ignoreFrontmatterKey: "lokf",
   escalateToError: [],
   fieldAliases: [],
   excludeFolders: [],
   batchSize: 50,
-  recommendSiblingPlugin: true,
+  recommendOkfValidator: false,
   inlineDiagnostics: true,
   autocomplete: true,
   bundleRoots: [],
@@ -252,10 +271,12 @@ export function toVaultPath(bundlePath: string, root: string): string {
 const FM_RE = /^---\r?\n([\s\S]*?)\r?\n---/;
 const SCHEME_RE = /^[a-z][a-z0-9+.-]*:/i;
 
-export function isReserved(path: string): "index" | "log" | null {
+export function isReserved(path: string): "index" | "log" | "diataxis" | null {
   const f = (path.split("/").pop() || "").toLowerCase();
   if (f === "index.md") return "index";
   if (f === "log.md") return "log";
+  // A generated Obsidian affordance (the Diátaxis map), never a concept.
+  if (f === "diataxis.md") return "diataxis";
   return null;
 }
 
@@ -578,6 +599,24 @@ export function validateRootHeader(
 
 // ---- Golden Rule 3: type vocabulary, genre, type-specific fields ----
 
+// Frontmatter keys only a LOKF/OKF concept carries - used to tell a real concept
+// that is missing its required `type` from an ordinary vault note that merely
+// has some frontmatter. Deliberately excludes keys an ordinary note may also use
+// - the generic title/description/tags/resource, and also `status`/`genre`,
+// which personal vaults commonly repurpose - so a missing-type error never fires
+// on a note that was never a LOKF concept.
+const CONCEPT_SIGNAL_FIELDS = new Set<string>([
+  ...RELATION_FIELDS,
+  "relations", "sources", "generated", "verified", "stale_after",
+  "distribution", "fields", "measures", "formula", "definition",
+  "runtime", "parameters", "computation", "executor", "attester",
+]);
+
+function hasConceptSignal(data: Record<string, unknown>): boolean {
+  for (const key of Object.keys(data)) if (CONCEPT_SIGNAL_FIELDS.has(key)) return true;
+  return false;
+}
+
 interface DistributionShape {
   access_url?: unknown;
 }
@@ -643,12 +682,22 @@ function validateFieldsAndDistribution(data: Record<string, unknown>): LokfIssue
 export function validateTypeVocabulary(data: Record<string, unknown>, settings: LokfSettings): LokfIssue[] {
   const issues: LokfIssue[] = [];
   const typeRaw = data["type"];
-  // undefined/null is effectively missing - the installed OKF validator's
-  // error to raise, not this one's. A list or mapping is a genuine shape
-  // mistake (unlike a coercible scalar - "123" or "true" - which falls
-  // through to the ordinary "not one of the vocabulary" warning below,
-  // exactly like an unrecognized string would).
-  if (typeRaw === undefined || typeRaw === null) return issues;
+  // Missing `type` (OKF §4.1/§11) is flagged only when the note is plainly a
+  // concept - it carries other LOKF/OKF fields - so an ordinary vault note with
+  // just tags or aliases is still left alone. Gated with the rest of the OKF
+  // base layer. A list or mapping is a genuine shape mistake (unlike a coercible
+  // scalar - "123" or "true" - which falls through to the "not one of the
+  // vocabulary" warning below, exactly like an unrecognized string would).
+  if (typeRaw === undefined || typeRaw === null) {
+    if (settings.checkOkfBaseLayer && hasConceptSignal(data)) {
+      issues.push({
+        severity: "error",
+        rule: "okf/type-required",
+        message: "This note carries LOKF fields but no `type` - OKF requires a type on every concept (§4.1/§11, REQUIRED). Add one naming its kind (a LOKF class like Metric or Dataset, or any OKF type string).",
+      });
+    }
+    return issues;
+  }
   const typeScalar = asScalar(typeRaw);
   if (typeScalar === null) {
     issues.push({
@@ -660,7 +709,12 @@ export function validateTypeVocabulary(data: Record<string, unknown>, settings: 
     return issues;
   }
   const type = typeScalar.trim();
-  if (!type) return issues; // blank string is effectively missing too
+  if (!type) {
+    if (settings.checkOkfBaseLayer && hasConceptSignal(data)) {
+      issues.push({ severity: "error", rule: "okf/type-required", key: "type", message: "`type` is blank - OKF requires a non-empty type on every concept (§4.1/§11, REQUIRED)." });
+    }
+    return issues; // blank string is effectively missing too
+  }
 
   if (settings.warnUnknownType && !isKnownType(type, settings.knownTypes)) {
     issues.push({
@@ -907,8 +961,11 @@ export function validateConceptId(data: Record<string, unknown>, path: string, b
 // are the load-bearing substrate of LOKF's curation ceremony (draft → verified
 // → stale), so their *shape* is LOKF Enforcer's business - not the deep
 // credibility/tier interpretation, which stays an installed OKF validator's
-// job. Every finding is a warning, and nothing fires on a bundle that carries
-// no §5 fields, so a plain LOKF bundle sees no new noise.
+// job. Findings are warnings except the two fields OKF marks REQUIRED -
+// `generated.by` (§5.2) and a source's `resource` (§5.1) - which are errors
+// (relaxable via enforceOkfConformance); nothing fires on a bundle that carries
+// no §5 fields, so a plain LOKF bundle sees no new noise. Shape only, never the
+// trust-tier or credibility verdict.
 
 function isDateObject(value: unknown): boolean {
   return Object.prototype.toString.call(value) === "[object Date]" && !isNaN((value as Date).getTime());
@@ -925,14 +982,16 @@ const DATETIME_RE = /^\d{4}-\d{2}-\d{2}([T ]\d{2}:\d{2}(:\d{2})?(\.\d+)?(Z|[+-]\
 const ACTOR_RE = /^(?:(?:human|process):\S+|[^\s/]+\/[^\s/]+)$/;
 
 /** One `{ by, at }` event under `generated` or an entry of `verified`. */
-function validateTrustEvent(label: string, keyPath: string, entry: unknown, issues: LokfIssue[]): void {
+function validateTrustEvent(label: string, keyPath: string, entry: unknown, issues: LokfIssue[], byRequired: boolean): void {
   if (!isPlainObject(entry)) {
     issues.push({ severity: "warning", rule: "lokf/5-trust", key: keyPath, message: `${label} should be a mapping with { by, at }.` });
     return;
   }
   const by = entry["by"];
   if (by === undefined) {
-    issues.push({ severity: "warning", rule: "lokf/5-trust", key: keyPath, message: `${label} is missing "by" - the actor that performed it, from which trust tiers derive.` });
+    // `generated.by` is REQUIRED (OKF §5.2); a verified event's `by` is not
+    // spec-mandated, so it stays a shape warning.
+    issues.push({ severity: byRequired ? "error" : "warning", rule: "lokf/5-trust", key: keyPath, message: `${label} is missing "by" - the actor that performed it, from which trust tiers derive.` });
   } else {
     const actor = asScalar(by);
     if (actor === null || !actor.trim()) {
@@ -955,16 +1014,16 @@ export function validateTrustLifecycle(data: Record<string, unknown>, settings: 
   const issues: LokfIssue[] = [];
 
   const generated = data["generated"];
-  if (generated !== undefined) validateTrustEvent("generated", "generated", generated, issues);
+  if (generated !== undefined) validateTrustEvent("generated", "generated", generated, issues, true);
 
   const verified = data["verified"];
   if (verified !== undefined) {
     if (Array.isArray(verified)) {
-      verified.forEach((entry, i) => validateTrustEvent(`verified[${i}]`, `verified[${i}]`, entry, issues));
+      verified.forEach((entry, i) => validateTrustEvent(`verified[${i}]`, `verified[${i}]`, entry, issues, false));
     } else if (isPlainObject(verified)) {
       // A single event mapping is tolerated - the schema normalizes it to a
       // one-element list, exactly as with a single relation target.
-      validateTrustEvent("verified", "verified", verified, issues);
+      validateTrustEvent("verified", "verified", verified, issues, false);
     } else {
       issues.push({ severity: "warning", rule: "lokf/5-trust", key: "verified", message: "verified should be a list of { by, at } events (or a single such mapping)." });
     }
@@ -995,7 +1054,8 @@ export function validateTrustLifecycle(data: Record<string, unknown>, settings: 
         if (!isPlainObject(entry)) {
           issues.push({ severity: "warning", rule: "lokf/5-trust", key: `sources[${i}]`, message: `sources[${i}] should be a { resource, … } object.` });
         } else if (entry["resource"] === undefined || (typeof entry["resource"] === "string" && !entry["resource"].trim())) {
-          issues.push({ severity: "warning", rule: "lokf/5-trust", key: `sources[${i}]`, message: `sources[${i}] is missing the required "resource".` });
+          // A source's `resource` is REQUIRED within an entry (OKF §5.1).
+          issues.push({ severity: "error", rule: "lokf/5-trust", key: `sources[${i}]`, message: `sources[${i}] is missing the required "resource".` });
         }
       });
     }
@@ -1004,11 +1064,179 @@ export function validateTrustLifecycle(data: Record<string, unknown>, settings: 
   return issues;
 }
 
+// ---- OKF v0.2 base layer: Attested Computation contract (§10) ----
+
+const COMPUTATION_HEADING_RE = /^#{1,6}\s+computation\s*$/im;
+
+/** The Attested Computation contract shape (OKF §10.2): `runtime` is required,
+ *  and `parameters`/`executor`/`attester`/`computation` are checked for shape
+ *  when present. The computation must live in a body `# Computation` fence or the
+ *  file named by `computation` (§10.3) - only checkable when `body` is in hand. */
+function validateAttestedComputation(data: Record<string, unknown>, body: string | undefined): LokfIssue[] {
+  const issues: LokfIssue[] = [];
+  const warn = (key: string | undefined, message: string) =>
+    issues.push({ severity: "warning", rule: "okf/attested-computation", ...(key ? { key } : {}), message });
+
+  const runtime = asScalar(data["runtime"]);
+  if (runtime === null || !runtime.trim()) {
+    issues.push({ severity: "error", rule: "okf/attested-computation", message: "An Attested Computation requires a `runtime` (OKF §10.2, REQUIRED) - e.g. bigquery, postgres, dbt, python - it says how to run the computation and what parameters mean." });
+  }
+
+  const parameters = data["parameters"];
+  if (parameters !== undefined) {
+    if (!Array.isArray(parameters)) {
+      warn("parameters", "`parameters` should be a list of { name, type, required } entries (OKF §10.2).");
+    } else {
+      parameters.forEach((entry, i) => {
+        if (!isPlainObject(entry)) {
+          warn(`parameters[${i}]`, `parameters[${i}] should be a { name, type, required } mapping.`);
+          return;
+        }
+        const p = entry as { name?: unknown; required?: unknown };
+        if (asScalar(p.name) === null || !String(p.name).trim()) {
+          warn(`parameters[${i}]`, `parameters[${i}] is missing a name - a parameter is a named hole the agent may fill (§10.2).`);
+        }
+        if (p.required !== undefined && typeof p.required !== "boolean") {
+          warn(`parameters[${i}]`, `parameters[${i}].required should be true or false.`);
+        }
+      });
+    }
+  }
+
+  const executor = data["executor"];
+  if (executor !== undefined) {
+    if (!isPlainObject(executor)) {
+      warn("executor", "`executor` should be a { resource, receipt } mapping (OKF §10.2).");
+    } else {
+      const e = executor as { resource?: unknown; receipt?: unknown };
+      if (asScalar(e.resource) === null || !String(e.resource).trim()) {
+        warn("executor", "`executor.resource` is required - it names the run instructions or code (§10.2).");
+      }
+      if (e.receipt !== undefined && !(Array.isArray(e.receipt) && e.receipt.every((r) => typeof r === "string"))) {
+        warn("executor", "`executor.receipt` should be a list of field names a run must return (§10.2).");
+      }
+    }
+  }
+
+  const attester = data["attester"];
+  if (attester !== undefined) {
+    if (!isPlainObject(attester)) {
+      warn("attester", "`attester` should be a { resource } mapping (OKF §10.2).");
+    } else {
+      const resource = (attester as { resource?: unknown }).resource;
+      if (asScalar(resource) === null || !String(resource).trim()) {
+        warn("attester", "`attester.resource` is required - it names the deterministic verdict code (§10.2).");
+      }
+    }
+  }
+
+  const computation = data["computation"];
+  const hasComputationPath = asScalar(computation) !== null && String(computation).trim() !== "";
+  if (computation !== undefined && !hasComputationPath) {
+    warn("computation", "`computation` should be a path to the computation file (OKF §6.2/§10.3).");
+  }
+  if (body !== undefined && !hasComputationPath && !COMPUTATION_HEADING_RE.test(body)) {
+    warn(undefined, "An Attested Computation needs its computation in a body `# Computation` block, or a file named by `computation` (OKF §10.3).");
+  }
+
+  return issues;
+}
+
+// ---- OKF v0.2 base layer: v0.1 -> v0.2 migration hints (§13) ----
+
+const CITATIONS_HEADING_RE = /^#{1,6}\s+citations\s*$/im;
+
+/** Flags the two OKF v0.1 forms superseded in v0.2 (§13.1): the `timestamp`
+ *  field (now `generated`) and a body `# Citations` list (now `sources`). */
+function validateOkfMigration(data: Record<string, unknown>, body: string | undefined): LokfIssue[] {
+  const issues: LokfIssue[] = [];
+  if (data["timestamp"] !== undefined) {
+    issues.push({
+      severity: "warning",
+      rule: "okf/migration",
+      key: "timestamp",
+      message: "`timestamp` is superseded by `generated` in OKF v0.2 (§13.1) - record `generated: { by, at }`; consumers may still fall back to `timestamp`.",
+    });
+  }
+  if (body !== undefined && CITATIONS_HEADING_RE.test(body)) {
+    issues.push({
+      severity: "warning",
+      rule: "okf/migration",
+      message: "A body `# Citations` list is superseded by the `sources` frontmatter field in OKF v0.2 (§13.1).",
+    });
+  }
+  return issues;
+}
+
+// ---- OKF v0.2 base layer: reserved index.md / log.md structure (§8/§9) ----
+
+/** A non-root index.md carries no frontmatter (OKF §8): only a bundle-root
+ *  index.md may, and only `okf_version` (LOKF puts the semantic header there,
+ *  which is why the root is exempt). Reserved-file structure is a §11
+ *  conformance requirement, so a violation is an error. */
+function validateIndexStructure(hasFm: boolean, isRoot: boolean): LokfIssue[] {
+  if (isRoot || !hasFm) return [];
+  return [{
+    severity: "error",
+    rule: "okf/index-structure",
+    message: "An index.md carries no frontmatter (OKF §8/§11) - only a bundle-root index.md may, and only `okf_version`. Move these keys into a concept file.",
+  }];
+}
+
+const HEADING_RE = /^#{1,6}[ \t]+(.+?)[ \t]*$/gm;
+const ISO_DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+// A heading a person plainly meant as a date (a 4-digit year plus month/day, in
+// either order) but not in ISO 8601 form. Requiring the year keeps an ordinary
+// heading like a version "1.2.3" from being mistaken for a malformed date.
+const DATEISH_HEADING_RE = /^(?:\d{4}[./-]\d{1,2}[./-]\d{1,2}|\d{1,2}[./-]\d{1,2}[./-]\d{4})$/;
+
+/** log.md date headings MUST be ISO 8601 YYYY-MM-DD (OKF §9). Only checkable
+ *  when `body` is in hand; a heading that is not date-shaped is left alone. */
+function validateLogStructure(body: string | undefined): LokfIssue[] {
+  if (body === undefined) return [];
+  const issues: LokfIssue[] = [];
+  let m: RegExpExecArray | null;
+  HEADING_RE.lastIndex = 0;
+  while ((m = HEADING_RE.exec(body)) !== null) {
+    const heading = (m[1] ?? "").trim();
+    if (DATEISH_HEADING_RE.test(heading) && !ISO_DATE_RE.test(heading)) {
+      issues.push({
+        severity: "error",
+        rule: "okf/log-structure",
+        message: `log.md date heading "${heading}" should be ISO 8601 YYYY-MM-DD (OKF §9, MUST).`,
+      });
+    }
+  }
+  return issues;
+}
+
+// OKF v0.2 rules the spec marks REQUIRED / MUST (or lists under §11 conformance):
+// reported as errors by default, downgraded to warnings when
+// `enforceOkfConformance` is off - a temporary escape hatch that keeps the
+// finding visible without blocking. Only error-severity entries of these rules
+// are touched; the same rules' advisory warnings are unaffected.
+const OKF_CONFORMANCE_RULES = new Set([
+  "okf/type-required",
+  "okf/attested-computation",
+  "okf/index-structure",
+  "okf/log-structure",
+  "lokf/5-trust",
+]);
+
+function relaxOkfConformance(issues: LokfIssue[], settings: LokfSettings): LokfIssue[] {
+  if (settings.enforceOkfConformance) return issues;
+  return issues.map((issue): LokfIssue =>
+    issue.severity === "error" && OKF_CONFORMANCE_RULES.has(issue.rule) ? { ...issue, severity: "warning" } : issue
+  );
+}
+
 // ---- Orchestrator ----
 
 /**
- * `data` is already-parsed frontmatter (empty when `hasFm` is false). Parsing
- * lives in the caller so this module stays free of any YAML dependency.
+ * `data` is already-parsed frontmatter (empty when `hasFm` is false); `body` is
+ * the markdown after it when the caller has the full file (the scan), and
+ * undefined on the metadata-cache path, where body-shaped OKF checks are simply
+ * skipped. Parsing lives in the caller so this module stays YAML-free.
  */
 export function validateLokfConcept(
   path: string,
@@ -1017,7 +1245,8 @@ export function validateLokfConcept(
   isRoot: boolean,
   baseIri: string | null,
   settings: LokfSettings,
-  exists?: (path: string) => boolean
+  exists?: (path: string) => boolean,
+  body?: string
 ): LokfIssue[] {
   const reserved = isReserved(path);
 
@@ -1025,20 +1254,47 @@ export function validateLokfConcept(
   // including the root header - but stays a concept in the bundle graph.
   if (hasFm && isIgnoredByFrontmatter(data, settings)) return [];
 
-  if (reserved === "index" && isRoot) return applySeverityOverrides(validateRootHeader(data, hasFm, settings), settings);
-  if (reserved) return []; // non-root index.md / log.md carry no LOKF surface
+  // Reserved files carry no LOKF concept surface, but the OKF base layer checks
+  // their structure (§8/§9) when enabled - the root index.md also keeps its LOKF
+  // header check.
+  if (reserved === "index") {
+    const header = isRoot ? validateRootHeader(data, hasFm, settings) : [];
+    const structure = settings.checkOkfBaseLayer ? validateIndexStructure(hasFm, isRoot) : [];
+    return applySeverityOverrides(relaxOkfConformance([...header, ...structure], settings), settings);
+  }
+  if (reserved === "log") {
+    return applySeverityOverrides(relaxOkfConformance(settings.checkOkfBaseLayer ? validateLogStructure(body) : [], settings), settings);
+  }
+  if (reserved) return []; // diataxis.md - a generated affordance, never a concept
   if (!hasFm) return []; // missing frontmatter entirely is the OKF validator's error
 
   const cut = path.lastIndexOf("/");
   const conceptDir = cut > 0 ? path.slice(0, cut) : "";
 
+  const okfBaseLayer: LokfIssue[] = [];
+  if (settings.checkOkfBaseLayer) {
+    // Migration hints only make sense for a note that is actually a concept - one
+    // carrying a `type` or another LOKF field - so an ordinary note that merely
+    // uses `timestamp` or a `# Citations` heading is left alone.
+    if (data["type"] !== undefined || hasConceptSignal(data)) {
+      okfBaseLayer.push(...validateOkfMigration(data, body));
+    }
+    if (normalizeTypeKey(asScalar(data["type"]) ?? "") === "attestedcomputation") {
+      okfBaseLayer.push(...validateAttestedComputation(data, body));
+    }
+  }
+
   return applySeverityOverrides(
-    [
-      ...validateTypeVocabulary(data, settings),
-      ...validateRelationships(data, baseIri, settings, exists, conceptDir),
-      ...validateConceptId(data, path, baseIri),
-      ...validateTrustLifecycle(data, settings),
-    ],
+    relaxOkfConformance(
+      [
+        ...validateTypeVocabulary(data, settings),
+        ...validateRelationships(data, baseIri, settings, exists, conceptDir),
+        ...validateConceptId(data, path, baseIri),
+        ...validateTrustLifecycle(data, settings),
+        ...okfBaseLayer,
+      ],
+      settings
+    ),
     settings
   );
 }

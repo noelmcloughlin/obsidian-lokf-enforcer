@@ -139,5 +139,311 @@
     "okf_core",
     "lokf_semantic",
     "okf_v02"
+  ],
+  "slots": [
+    {
+      "name": "id",
+      "description": "The concept's stable IRI. By convention it is the bundle base IRI joined with the Concept ID (the file path within the bundle, minus the `.md` suffix). Becomes the JSON-LD @id / RDF subject."
+    },
+    {
+      "name": "type",
+      "description": "The concept's type - OKF's single required field. SHOULD name a LOKF class (e.g. Metric, Dataset, Table, Playbook, GlossaryTerm)."
+    },
+    {
+      "name": "title",
+      "description": "Human-readable display name."
+    },
+    {
+      "name": "description",
+      "description": "A single-sentence summary of the concept."
+    },
+    {
+      "name": "resource",
+      "description": "A URI that uniquely identifies the underlying real-world asset the concept describes (a table console URL, an API base URL, etc.). Absent for purely abstract concepts."
+    },
+    {
+      "name": "tags",
+      "description": "Short cross-cutting keywords for categorization."
+    },
+    {
+      "name": "timestamp",
+      "description": "ISO 8601 datetime of the last meaningful change."
+    },
+    {
+      "name": "created",
+      "description": "ISO 8601 datetime the concept was created."
+    },
+    {
+      "name": "version",
+      "description": "A version string for the concept's content."
+    },
+    {
+      "name": "license",
+      "description": "The license under which the concept or bundle is offered."
+    },
+    {
+      "name": "author",
+      "description": "The agent(s) responsible for authoring the concept."
+    },
+    {
+      "name": "publisher",
+      "description": "The agent responsible for making the bundle available."
+    },
+    {
+      "name": "body",
+      "description": "The markdown body of the concept document (everything after the frontmatter). Mapped to schema:text; carried as a field only in the JSON-LD / JSON serialization, not duplicated in the frontmatter."
+    },
+    {
+      "name": "citations",
+      "description": "External sources supporting claims in the body."
+    },
+    {
+      "name": "concepts",
+      "description": "The concepts contained in a bundle."
+    },
+    {
+      "name": "relations",
+      "description": "Typed relationships whose predicate is not covered by a named relation slot. Each entry is a reified Relation (predicate + target)."
+    },
+    {
+      "name": "isPartOf",
+      "description": "The target concept that this concept is a part of."
+    },
+    {
+      "name": "hasPart",
+      "description": "A concept that is a part of this concept."
+    },
+    {
+      "name": "references",
+      "description": "A concept or resource this concept refers to."
+    },
+    {
+      "name": "dependsOn",
+      "description": "A concept this concept depends on."
+    },
+    {
+      "name": "derivedFrom",
+      "description": "An entity this concept was derived from (provenance)."
+    },
+    {
+      "name": "about",
+      "description": "The subject matter this concept is about."
+    },
+    {
+      "name": "sameAs",
+      "description": "An IRI asserting this concept is the same entity as another."
+    },
+    {
+      "name": "relatedTo",
+      "description": "A generic association to another concept."
+    },
+    {
+      "name": "definedBy",
+      "description": "A resource that formally defines this concept."
+    },
+    {
+      "name": "source",
+      "description": "A resource from which this concept is derived or sourced."
+    },
+    {
+      "name": "genre",
+      "description": "The Diátaxis documentation mode of the concept's markdown body (tutorial, how-to, reference, or explanation). An optional facet orthogonal to `type`: `type` says what the concept is *about*, `genre` says how its prose *serves the reader*."
+    },
+    {
+      "name": "predicate",
+      "description": "The relationship type. SHOULD be drawn from the RelationType vocabulary."
+    },
+    {
+      "name": "target",
+      "description": "The IRI (or Concept ID) of the relationship's object."
+    },
+    {
+      "name": "relation_label",
+      "description": "An optional human-readable label for the relationship."
+    },
+    {
+      "name": "distribution",
+      "description": "Accessible forms of the dataset."
+    },
+    {
+      "name": "fields",
+      "description": "The columns / properties that make up a dataset's schema."
+    },
+    {
+      "name": "name",
+      "description": "A name."
+    },
+    {
+      "name": "email",
+      "description": "Contact email address."
+    },
+    {
+      "name": "datatype",
+      "description": "The data type of a field."
+    },
+    {
+      "name": "unit",
+      "description": "The unit of measurement (e.g. USD, seconds, count)."
+    },
+    {
+      "name": "is_key",
+      "description": "Whether the field is (part of) the primary key."
+    },
+    {
+      "name": "constraints",
+      "description": "Free-text or expression describing constraints on a field."
+    },
+    {
+      "name": "access_url",
+      "description": "A URL that gives access to a distribution."
+    },
+    {
+      "name": "media_type",
+      "description": "The media (MIME) type of a distribution."
+    },
+    {
+      "name": "formula",
+      "description": "The calculation or definition expression for a metric."
+    },
+    {
+      "name": "measures",
+      "description": "What the metric measures (a concept IRI or description)."
+    },
+    {
+      "name": "endpoint",
+      "description": "The base URL or invocation endpoint of a service."
+    },
+    {
+      "name": "http_method",
+      "description": "The HTTP method used to invoke the service, if applicable."
+    },
+    {
+      "name": "documentation",
+      "description": "A link to the service's documentation."
+    },
+    {
+      "name": "definition",
+      "description": "The formal definition of a term."
+    },
+    {
+      "name": "abbreviation",
+      "description": "A short form or acronym for a term."
+    },
+    {
+      "name": "roleName",
+      "description": "The name/title of the role held (e.g. a job title)."
+    },
+    {
+      "name": "startDate",
+      "description": "The date the role began (ISO 8601 date or year)."
+    },
+    {
+      "name": "endDate",
+      "description": "The date the role ended; omit for a role still held."
+    },
+    {
+      "name": "memberOf",
+      "description": "The organization within which the role is held."
+    },
+    {
+      "name": "holder",
+      "description": "The agent (typically a Person) who holds the role."
+    },
+    {
+      "name": "url",
+      "description": "A URL."
+    },
+    {
+      "name": "lokf_version",
+      "description": "The LOKF version the bundle targets (e.g. \"0.2\")."
+    },
+    {
+      "name": "okf_version",
+      "description": "The OKF version the bundle remains compatible with (e.g. \"0.2\")."
+    },
+    {
+      "name": "base_iri",
+      "description": "The base IRI against which Concept IDs are resolved to produce each concept's stable `id`. An identifier namespace, not a hyperlink: it need not resolve to a live page (a 404 is valid), so it is only required to be a well-formed absolute IRI with an authority. A resolvable \"Cool URI\" is the ideal, not a requirement."
+    },
+    {
+      "name": "context",
+      "description": "The URL of the JSON-LD @context to attach to this bundle's concepts to interpret their frontmatter as Linked Data."
+    },
+    {
+      "name": "sources",
+      "description": "The materials this concept derives from, each carrying objective credibility signals. Markdown footnotes join to entries via `sources[].id`. Supersedes `citations` and the body `# Citations` convention."
+    },
+    {
+      "name": "usage_window",
+      "description": "The `{ from, to }` date range framing every `usage_count`. Attached both to Concept (the shared window, sibling of `sources`) and to Source (a per-entry override)."
+    },
+    {
+      "name": "from",
+      "description": "Start date (inclusive, YYYY-MM-DD) of a usage window."
+    },
+    {
+      "name": "to",
+      "description": "End date (inclusive, YYYY-MM-DD) of a usage window."
+    },
+    {
+      "name": "usage_count",
+      "description": "How often the source's resource was exercised (views, executions, reads) over the governing usage_window. An adoption/liveness signal read as order-of-magnitude and trend, not a score."
+    },
+    {
+      "name": "last_modified",
+      "description": "When the SOURCE itself last changed (YYYY-MM-DD). A recency signal about the source, distinct from `generated.at`, which records when this concept's content was produced. Same predicate as the deprecated `timestamp`, on a different subject node (source vs concept)."
+    },
+    {
+      "name": "generated",
+      "description": "How and when the current content was produced: `by` (REQUIRED actor) and `at` (ISO 8601 datetime). Supersedes the v0.1 `timestamp` field; consumers MAY fall back to `timestamp` when `generated` is absent."
+    },
+    {
+      "name": "verified",
+      "description": "Verification events confirming the content against its sources or resource. Independent of `generated`: who wrote a concept need not be who confirmed it. Trust tiers derive from the actors: absent = unverified; only non-human actors = machine-confirmed; any `human:<id>` actor = human-reviewed."
+    },
+    {
+      "name": "by",
+      "description": "The actor that performed the event, as a plain OKF §7 actor string (`<producer>/<version>`, `human:<id>`, `process:<id>`) — a literal, never an IRI. Trust tiers derive from the `human:` prefix via string inspection (SPARQL STRSTARTS)."
+    },
+    {
+      "name": "at",
+      "description": "ISO 8601 datetime at which the event completed."
+    },
+    {
+      "name": "status",
+      "description": "Lifecycle status of the concept: draft | stable | deprecated. Absent means stable. Advisory, never access control."
+    },
+    {
+      "name": "stale_after",
+      "description": "Absolute date (YYYY-MM-DD) on or after which the concept is stale (stale when today >= stale_after)."
+    },
+    {
+      "name": "runtime",
+      "description": "REQUIRED on an Attested Computation. How to run the computation (bigquery | postgres | dbt | python | Looker | ...); defines what `parameters` mean and how the executor and attester interpret the contract."
+    },
+    {
+      "name": "parameters",
+      "description": "The typed, named holes the agent may fill — the ONLY surface the agent may bind. Binding semantics follow `runtime`."
+    },
+    {
+      "name": "required",
+      "description": "Whether a value for the parameter must be supplied."
+    },
+    {
+      "name": "computation",
+      "description": "Optional path to a file holding the computation; absent means the body's `# Computation` fenced block IS the computation. Minted in lokf: schema:contentUrl is the nearest real property but is scoped to MediaObject bytes."
+    },
+    {
+      "name": "executor",
+      "description": "How the computation is run and what evidence a run must return."
+    },
+    {
+      "name": "receipt",
+      "description": "The field names a run must return (e.g. job_id, executed_sql, result) — the evidence the attester inspects. Receipts themselves are runtime artifacts, never stored in the bundle. Minted in lokf: no established vocabulary describes a receipt-shape declaration."
+    },
+    {
+      "name": "attester",
+      "description": "The deterministic, non-LLM verdict check over a receipt."
+    }
   ]
 }

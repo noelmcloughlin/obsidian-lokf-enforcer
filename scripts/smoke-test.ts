@@ -39,6 +39,9 @@ import { detectSuggestContext, withinFrontmatter } from "../src/suggest-context"
 import { computeFixes, type FixEdit } from "../src/fixes";
 import { extractBodyLinks, classifyLink, buildProposals, type BodyLink } from "../src/propose";
 import { issueMatchesFilter, topLevelKey } from "../src/report-filter";
+import { buildConceptBlock, applyConceptBlock, buildDiataxisBlock, applyDiataxisBlock, newDiataxisNote } from "../src/affordances";
+import { FIELD_ORDER, LOKF_FIELD_DOCS, resolveFieldDocs } from "../src/fields";
+import lokfVocab from "../src/lokf-vocab.json";
 let failures = 0;
 
 function expect(name: string, condition: boolean, detail: string): boolean {
@@ -74,6 +77,7 @@ function check(
   } = {}
 ): LokfIssue[] {
   const { hasFm, data } = parse(content);
+  const { body } = splitFrontmatter(content);
   return validateLokfConcept(
     path,
     hasFm,
@@ -81,7 +85,8 @@ function check(
     opts.isRoot ?? false,
     opts.baseIri ?? null,
     opts.settings ?? DEFAULT_SETTINGS,
-    opts.exists
+    opts.exists,
+    body
   );
 }
 
@@ -492,12 +497,77 @@ section("a non-string type is a shape warning, not silence", () => {
   );
 
   const missing = check("misc/thing.md", `---\ntitle: No type at all\n---\n`);
-  expect("a genuinely missing type stays silent (OKF's error to raise)", missing.length === 0, show(missing));
+  expect("a note with no LOKF fields and no type stays silent (ordinary vault note)", missing.length === 0, show(missing));
 });
 
 section("spaced 'Attested Computation' normalizes to the vocabulary class", () => {
   const issues = check("glossary/ac.md", `---\ntype: Attested Computation\n---\n`);
   expect("no vocabulary warning", !issues.some((i) => i.rule === "lokf/3-vocab"), show(issues));
+});
+
+const okfRules = (issues: LokfIssue[], prefix = "okf/") => issues.filter((i) => i.rule.startsWith(prefix));
+
+section("OKF base layer - required type only when the note is a concept (§4.1)", () => {
+  const plain = check("misc/note.md", `---\ntitle: Just a note\ntags: [x]\n---\n`);
+  expect("a note with only generic frontmatter is left alone", okfRules(plain).length === 0, show(plain));
+
+  const statusOnly = check("misc/reading.md", `---\nstatus: stable\ntags: [x]\n---\n`);
+  expect("a note using only generic status/tags is left alone (no type-required)", okfRules(statusOnly, "okf/type-required").length === 0 && errors(statusOnly) === 0, show(statusOnly));
+
+  const concept = check("misc/thing.md", `---\ndependsOn:\n  - other.md\n---\n`);
+  expect("a concept-shaped note missing type errors (OKF §4.1/§11 REQUIRED)", okfRules(concept, "okf/type-required").length === 1 && errors(concept) === 1, show(concept));
+
+  const off = check("misc/thing.md", `---\ndependsOn:\n  - other.md\n---\n`, { settings: { ...DEFAULT_SETTINGS, checkOkfBaseLayer: false } });
+  expect("no OKF findings when the base layer is off", okfRules(off).length === 0, show(off));
+});
+
+section("OKF base layer - Attested Computation contract shape (§10)", () => {
+  const bare = check("comp/rev.md", `---\ntype: Attested Computation\n---\n`);
+  expect("missing runtime errors (OKF §10.2 REQUIRED)", okfRules(bare, "okf/attested-computation").some((i) => /runtime/.test(i.message) && i.severity === "error"), show(bare));
+  expect("missing computation block warns (§10.3, advisory)", okfRules(bare, "okf/attested-computation").some((i) => /# Computation/.test(i.message) && i.severity === "warning"), show(bare));
+
+  const wellFormed =
+    `---\ntype: Attested Computation\nruntime: bigquery\nparameters:\n  - { name: year, type: integer, required: true }\n` +
+    `executor:\n  resource: refs/run.md\n  receipt: [job_id]\nattester:\n  resource: refs/att.py\n---\n# Computation\n\n    SELECT 1\n`;
+  const wf = check("comp/ok.md", wellFormed);
+  expect("a well-formed Attested Computation draws no contract findings", okfRules(wf, "okf/attested-computation").length === 0, show(wf));
+
+  const badParam = check("comp/p.md", `---\ntype: Attested Computation\nruntime: dbt\nparameters:\n  - { type: integer }\ncomputation: refs/x.sql\n---\n`);
+  expect("a parameter missing a name warns (optional-field shape, never errors)", okfRules(badParam, "okf/attested-computation").some((i) => i.key === "parameters[0]" && i.severity === "warning") && errors(badParam) === 0, show(badParam));
+
+  const badExecutor = check("comp/e.md", `---\ntype: Attested Computation\nruntime: python\nexecutor:\n  receipt: not-a-list\ncomputation: refs/x.py\n---\n`);
+  expect("an executor missing resource warns", okfRules(badExecutor, "okf/attested-computation").some((i) => i.key === "executor"), show(badExecutor));
+});
+
+section("OKF base layer - v0.1 to v0.2 migration hints (§13)", () => {
+  const legacy = check("m/old.md", `---\ntype: Metric\ntimestamp: 2026-01-01T00:00:00Z\n---\n`);
+  expect("a legacy timestamp warns to migrate to generated (§13, tolerated - never errors)", okfRules(legacy, "okf/migration").some((i) => i.key === "timestamp" && i.severity === "warning") && errors(legacy) === 0, show(legacy));
+
+  const citations = check("m/c.md", `---\ntype: Reference\n---\n# Notes\n\n# Citations\n\n- a\n`);
+  expect("a body # Citations list warns to migrate to sources", okfRules(citations, "okf/migration").some((i) => /Citations/.test(i.message)), show(citations));
+
+  const personalTimestamp = check("misc/note.md", `---\ntimestamp: 2026-01-01T00:00:00Z\ntags: [x]\n---\n`);
+  expect("a plain note using timestamp (no type or LOKF fields) gets no migration nudge", okfRules(personalTimestamp).length === 0 && errors(personalTimestamp) === 0, show(personalTimestamp));
+});
+
+section("OKF base layer - reserved index.md / log.md structure (§8/§9)", () => {
+  const nonRootIndex = check("services/index.md", `---\nokf_version: "0.2"\n---\n# Services\n`);
+  expect("a non-root index.md carrying frontmatter errors (OKF §8/§11)", okfRules(nonRootIndex, "okf/index-structure")[0]?.severity === "error", show(nonRootIndex));
+
+  const rootIndex = check("index.md", `---\nlokf_version: "0.2"\nbase_iri: https://acme.example/kb/\n---\n`, { isRoot: true });
+  expect("a root index.md keeps its header exemption", okfRules(rootIndex, "okf/index-structure").length === 0, show(rootIndex));
+
+  const badLog = check("log.md", `# Update Log\n\n## 2026/01/02\n\n* did a thing\n`);
+  expect("a non-ISO log date heading errors (OKF §9 MUST)", okfRules(badLog, "okf/log-structure")[0]?.severity === "error", show(badLog));
+
+  const goodLog = check("log.md", `# Update Log\n\n## 2026-01-02\n\n* did a thing\n`);
+  expect("an ISO 8601 log date heading is fine", okfRules(goodLog, "okf/log-structure").length === 0, show(goodLog));
+
+  const versionHeading = check("log.md", `# Changelog\n\n## 1.2.3\n\n* released\n`);
+  expect("a version-number heading is not mistaken for a bad date", okfRules(versionHeading, "okf/log-structure").length === 0, show(versionHeading));
+
+  const off = check("services/index.md", `---\nokf_version: "0.2"\n---\n`, { settings: { ...DEFAULT_SETTINGS, checkOkfBaseLayer: false } });
+  expect("reserved-file structure checks respect the off switch", okfRules(off).length === 0, show(off));
 });
 
 section("mintExpectedId / id-consistency", () => {
@@ -598,6 +668,7 @@ section("non-scalar values are named by shape, never stringified", () => {
 section("reserved files", () => {
   expect("non-root index.md yields nothing", check("services/index.md", "# Services\n").length === 0, "expected none");
   expect("log.md yields nothing", check("log.md", "# Change Log\n", { isRoot: true }).length === 0, "expected none");
+  expect("a generated diataxis.md is reserved, never validated as a concept", check("diataxis.md", "# Diátaxis map\n").length === 0, "expected none");
 });
 
 // ---- Golden fixtures: real bundle directories, walked whole ----
@@ -951,24 +1022,40 @@ section("a plain bundle with no §5 fields draws no trust findings", () => {
   expect("nothing fires when §5 is absent", trust(issues).length === 0, show(trust(issues)));
 });
 
-section("malformed §5 shapes each warn (never error)", () => {
+section("§5 shape findings: OKF-REQUIRED fields error, the rest warn", () => {
   const badVerified = check("m/a.md", `---\ntype: Reference\nverified: yes\n---\n`);
   expect("a scalar verified warns", trust(badVerified).some((i) => i.key === "verified") && errors(badVerified) === 0, show(badVerified));
 
   const noBy = check("m/b.md", `---\ntype: Reference\ngenerated:\n  at: 2026-01-01\n---\n`);
-  expect("generated missing by warns", trust(noBy).some((i) => i.rule === "lokf/5-trust"), show(noBy));
+  expect("generated missing by errors (OKF §5.2 REQUIRED)", trust(noBy).some((i) => i.rule === "lokf/5-trust" && i.severity === "error"), show(noBy));
 
   const badActor = check("m/c.md", `---\ntype: Reference\nverified:\n  - by: alice\n    at: 2026-01-01\n---\n`);
-  expect("a non-actor by warns and anchors to the actor", trust(badActor).some((i) => i.key === "verified[0].by"), show(badActor));
+  expect("a non-actor verified by warns (not spec-REQUIRED)", trust(badActor).some((i) => i.key === "verified[0].by" && i.severity === "warning"), show(badActor));
 
   const badStatus = check("m/d.md", `---\ntype: Reference\nstatus: archived\n---\n`, { settings: pluginDefaultSettings() });
-  expect("an out-of-vocabulary status warns", trust(badStatus).some((i) => i.rule === "lokf/5-lifecycle" && i.key === "status"), show(badStatus));
+  expect("an out-of-vocabulary status warns", trust(badStatus).some((i) => i.rule === "lokf/5-lifecycle" && i.key === "status" && i.severity === "warning"), show(badStatus));
 
   const badStale = check("m/e.md", `---\ntype: Reference\nstale_after: someday\n---\n`);
   expect("a non-date stale_after warns", trust(badStale).some((i) => i.key === "stale_after"), show(badStale));
 
   const badSource = check("m/f.md", `---\ntype: Reference\nsources:\n  - title: no resource here\n---\n`);
-  expect("a source missing resource warns", trust(badSource).some((i) => i.key === "sources[0]"), show(badSource));
+  expect("a source missing resource errors (OKF §5.1 REQUIRED)", trust(badSource).some((i) => i.key === "sources[0]" && i.severity === "error"), show(badSource));
+});
+
+section("OKF conformance can be relaxed to warnings temporarily (enforceOkfConformance)", () => {
+  const relaxed: LokfSettings = { ...DEFAULT_SETTINGS, enforceOkfConformance: false };
+
+  const noType = check("misc/thing.md", `---\ndependsOn:\n  - other.md\n---\n`, { settings: relaxed });
+  expect("a required-type error downgrades to a warning, still visible", okfRules(noType, "okf/type-required").some((i) => i.severity === "warning") && errors(noType) === 0, show(noType));
+
+  const noBy = check("m/b.md", `---\ntype: Reference\ngenerated:\n  at: 2026-01-01\n---\n`, { settings: relaxed });
+  expect("a §5 REQUIRED error downgrades too", trust(noBy).some((i) => i.severity === "warning") && errors(noBy) === 0, show(noBy));
+
+  const badLog = check("log.md", `## 2026/01/02\n`, { settings: relaxed });
+  expect("a reserved-structure error downgrades too", okfRules(badLog, "okf/log-structure").some((i) => i.severity === "warning") && errors(badLog) === 0, show(badLog));
+
+  const bareField = check("d/t.md", `---\ntype: Table\nfields: not-a-list\n---\n`, { settings: relaxed });
+  expect("a LOKF structural error is NOT relaxed", errors(bareField) >= 1, show(bareField));
 });
 
 section("the trust-shape check can be switched off", () => {
@@ -985,6 +1072,84 @@ section("the by actor pattern matches lokf.yaml (strict: human/process/producer-
   // A source's `author` admits `team:` etc., but a `by` slot does not.
   expect("team:<id> is rejected for a by slot", !ok("team:analytics"), "team: should not pass a by slot");
   expect("a bare name is rejected", !ok("John Smith"), "bare name should not pass");
+});
+
+section("affordances - concept block builds, tags genre, replaces in place, idempotent", () => {
+  const links = [
+    { predicate: "dependsOn", linktext: "Beta" },
+    { predicate: "isPartOf", linktext: "Alpha" },
+    { predicate: "dependsOn", linktext: "Beta" }, // duplicate
+  ];
+  const block = buildConceptBlock(links, "how-to");
+  expect("a block is produced for real links", block !== null, "expected a block");
+  expect("a canonical genre becomes a tag", (block ?? "").includes("#how-to"), block ?? "null");
+  expect("duplicates are collapsed", (block?.match(/\[\[Beta\]\]/g) ?? []).length === 1, block ?? "null");
+  expect("entries sort by predicate then target (dependsOn Beta before isPartOf Alpha)", (block ?? "").indexOf("[[Beta]] (dependsOn)") < (block ?? "").indexOf("[[Alpha]] (isPartOf)"), block ?? "null");
+  expect("genre alone still yields a block", buildConceptBlock([], "reference") !== null, "expected a block");
+  expect("a non-canonical genre earns no tag", buildConceptBlock([], "guide") === null, "expected null");
+  expect("no links and no genre yields no block", buildConceptBlock([], null) === null, "expected null");
+
+  const doc = "---\ntype: Reference\n---\n\nBody text.\n";
+  const once = applyConceptBlock(doc, links, "how-to");
+  expect("block is appended to a note without one", once !== null && once.includes("<!-- lokf:related -->"), once ?? "null");
+  expect("body prose is preserved", (once ?? "").includes("Body text."), once ?? "null");
+  const twice = applyConceptBlock(once ?? "", links, "how-to");
+  expect("re-running with the same inputs is a no-op", twice === null, twice ?? "changed");
+  const changed = applyConceptBlock(once ?? "", [{ predicate: "references", linktext: "Gamma" }], "how-to");
+  expect("changed inputs replace in place, never append a second block", changed !== null && (changed.match(/<!-- lokf:related -->/g) ?? []).length === 1, changed ?? "null");
+  const removed = applyConceptBlock(once ?? "", [], null);
+  expect("nothing to project removes an existing block", removed !== null && !(removed ?? "").includes("lokf:related"), removed ?? "null");
+});
+
+section("affordances - Diátaxis map groups by genre across all four quadrants", () => {
+  const entries = [
+    { genre: "tutorial", linktext: "Learn" },
+    { genre: "reference", linktext: "Spec" },
+    { genre: "tutorial", linktext: "Learn" }, // duplicate
+  ];
+  const block = buildDiataxisBlock(entries);
+  const headings = ["## Tutorials", "## How-to guides", "## Reference", "## Explanation"];
+  expect("all four quadrant headings appear", headings.every((h) => block.includes(h)), block);
+  expect("an empty quadrant reads 'No concepts yet.'", block.includes("_No concepts yet._"), block);
+  expect("a duplicate entry is collapsed", (block.match(/\[\[Learn\]\]/g) ?? []).length === 1, block);
+  const note = newDiataxisNote(entries);
+  expect("a fresh note carries a human title above the block", note.startsWith("# Diátaxis map"), note);
+  expect("re-generating the same map is a no-op", applyDiataxisBlock(note, entries) === null, "expected no change");
+});
+
+section("field reference - covers the header fields and frames base_iri as an identifier", () => {
+  const byName = new Map(LOKF_FIELD_DOCS.map((f) => [f.name, f.description]));
+  for (const key of ["lokf_version", "base_iri", "type", "id", "genre", "status", "verified", "relations"]) {
+    expect(`documents ${key}`, byName.has(key), `missing ${key}`);
+  }
+  const baseIri = byName.get("base_iri") ?? "";
+  expect(
+    "base_iri is framed as an identifier that need not resolve",
+    /identifier/i.test(baseIri) && /need not resolve/i.test(baseIri),
+    baseIri
+  );
+  expect("every field doc carries a non-empty description", LOKF_FIELD_DOCS.every((f) => f.description.trim().length > 0), "empty description");
+
+  // Resolution: the description flows straight from the schema manifest,
+  // unchanged - the schema is the single source of truth; this module only
+  // picks the fields and their order.
+  const resolved = resolveFieldDocs([{ name: "title", description: "STRAIGHT FROM THE SCHEMA" }]);
+  expect("the schema's description flows through unchanged", resolved.find((f) => f.name === "title")?.description === "STRAIGHT FROM THE SCHEMA", "schema description not used");
+  expect("a FIELD_ORDER field the manifest doesn't describe is dropped", resolved.length === 1, "undescribed fields not dropped");
+
+  // Drift guard: every surfaced field must be a real, described schema slot, so
+  // a rename/removal drops it and the length check below fails.
+  const manifestSlots = new Set(((lokfVocab as { slots?: { name: string }[] }).slots ?? []).map((s) => s.name));
+  expect(
+    "every FIELD_ORDER entry is a real schema slot",
+    LOKF_FIELD_DOCS.length === FIELD_ORDER.length && LOKF_FIELD_DOCS.every((f) => manifestSlots.has(f.name)),
+    "a FIELD_ORDER entry names a slot the schema doesn't have"
+  );
+
+  // Conciseness guard: schema descriptions must stay short enough for a one-row
+  // lookup (the reason they were tightened upstream) - catches a regression.
+  const longest = Math.max(...LOKF_FIELD_DOCS.map((f) => f.description.length));
+  expect("every field description stays modal-sized (<= 400 chars)", longest <= 400, `longest description is ${longest} chars`);
 });
 // (a) the lokf-scaffolding skeleton, with its <PLACEHOLDER> tokens filled in as
 // a real project would. scripts/fixtures/scaffolding-skeleton is a frozen copy
