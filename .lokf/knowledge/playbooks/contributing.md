@@ -1,8 +1,8 @@
 ---
 type: Playbook
-id: https://lokf-enforcer.example/knowledge/playbooks/contributing
+id: https://lokf-registrar.example/knowledge/playbooks/contributing
 title: Contributing
-description: Local dev setup, layout, and pre-PR checklist for LOKF Enforcer.
+description: Local dev setup, layout, and pre-PR checklist for LOKF Registrar.
 resource: CONTRIBUTING.md
 generated:
   by: process:lokf-librarian

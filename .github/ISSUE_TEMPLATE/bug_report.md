@@ -1,6 +1,6 @@
 ---
 name: Bug report
-about: Report a problem with LOKF Enforcer
+about: Report a problem with LOKF Registrar
 title: "[Bug] "
 labels: bug
 ---
@@ -18,7 +18,7 @@ What you expected to happen.
 
 - Obsidian version:
 - OS:
-- LOKF Enforcer version:
+- LOKF Registrar version:
 - OKF validator plugin installed (name/version), if any:
 
 **Additional context**
@@ -26,4 +26,4 @@ Screenshots, console errors (Ctrl/Cmd+Shift+I), or notes.
 
 ## AI Assistance
 
-If you used AI tools while preparing this issue, you are still the author and responsible for understanding, verifying, and defending your submission. Don't dump LLM output into this issue without curation. See the [AI Covenant](https://github.com/noelmcloughlin/obsidian-lokf-enforcer/blob/main/AI_COVENANT.md) for details.
+If you used AI tools while preparing this issue, you are still the author and responsible for understanding, verifying, and defending your submission. Don't dump LLM output into this issue without curation. See the [AI Covenant](https://github.com/noelmcloughlin/obsidian-lokf-registrar/blob/main/AI_COVENANT.md) for details.

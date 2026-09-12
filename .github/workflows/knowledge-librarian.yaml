@@ -116,7 +116,7 @@ jobs:
       - name: Enforce the agent's write scope
         run: |
           set -euo pipefail
-          out="$(git status --porcelain -- . ':!.lokf/knowledge' ':!.lokf/feedback.md' ':!.lokf/uv.lock')"
+          out="$(git status --porcelain -- . ':!.lokf/knowledge' ':!knowledge_bundle' ':!.lokf/feedback.md' ':!.lokf/uv.lock')"
           if [ -n "$out" ]; then
             echo "::error::The librarian agent touched files outside .lokf/knowledge/ and .lokf/feedback.md:"
             echo "$out"
@@ -135,8 +135,12 @@ jobs:
         run: |
           set -euo pipefail
           # Scope to the bundle so tool artifacts (e.g. a fresh .lokf/uv.lock from
-          # `uv sync`) never trigger a PR by themselves.
-          if [ -n "$(git status --porcelain -- .lokf/knowledge)" ]; then
+          # `uv sync`) never trigger a PR by themselves. Both of the bundle's
+          # names are listed: in lokf-sidecar's visible layout knowledge_bundle/
+          # is the real folder and .lokf/knowledge a link onto it, and a git
+          # pathspec never traverses a symlink. A name that does not exist in
+          # this repository is simply ignored by `git status`.
+          if [ -n "$(git status --porcelain -- .lokf/knowledge knowledge_bundle)" ]; then
             echo "changed=true" >> "$GITHUB_OUTPUT"
           else
             echo "changed=false" >> "$GITHUB_OUTPUT"
@@ -170,6 +174,10 @@ jobs:
         run: |
           set -euo pipefail
           git add -A -- .lokf/knowledge
+          # The bundle's visible name, when it is a real folder (see "Detect
+          # changes"); `git add` refuses a pathspec that matches nothing, hence
+          # the guard.
+          [ -e knowledge_bundle ] && git add -A -- knowledge_bundle || true
           # Reader feedback (written by lokf-docent, consumed by the librarian,
           # which removes handled entries) - carry it so entries don't come back.
           [ -e .lokf/feedback.md ] && git add -A -- .lokf/feedback.md || true

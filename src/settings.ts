@@ -1,18 +1,13 @@
-// settings.ts - the LOKF Enforcer settings tab.
+// settings.ts - the LOKF Registrar settings tab.
 //
 // Declarative (Obsidian 1.13.0+): the tab returns definitions rather than
 // building DOM, so every setting is indexed by Obsidian's settings search.
-import { App, PluginSettingTab } from "obsidian";
+import { App, Notice, PluginSettingTab, TFolder } from "obsidian";
 import type { SettingDefinitionItem } from "obsidian";
 import type LokfPlugin from "./main";
 import type { LokfSettings } from "./validator";
 import { joinCsv, parseCsv, hiddenRootSegment } from "./validator";
 import { SCHEMA_VERSION } from "./vocab";
-
-/** Obsidian's own deep link into the community-plugin browser. Opening it is
- *  the most this plugin ever does about the alternative OKF validator: the user
- *  installs and enables it themselves, exactly as they would any other plugin. */
-const OKF_ENFORCER_URI = "obsidian://show-plugin?id=okf-enforcer";
 
 type SettingKey = keyof LokfSettings;
 
@@ -57,8 +52,7 @@ export class LokfSettingTab extends PluginSettingTab {
   }
 
   /** Persisting goes through the plugin's own saveSettings() rather than the
-   *  inherited write, which would drop the OKF-validator-notice flag stored
-   *  beside the settings. */
+   *  inherited write, so there is exactly one place settings are written. */
   async setControlValue(key: string, value: unknown): Promise<void> {
     // The device-local flag isn't part of the synced settings object; it is
     // persisted to localStorage through the plugin, which also re-syncs the
@@ -74,7 +68,22 @@ export class LokfSettingTab extends PluginSettingTab {
     await this.plugin.saveSettings();
     // A cached base_iri may belong to a root that no longer exists in this
     // shape once the set of bundle roots changes.
-    if (key === "bundleRoots") this.plugin.invalidateBaseIriCache();
+    if (key === "bundleRoots") {
+      this.plugin.invalidateBaseIriCache();
+      // A dot-folder root is accepted rather than refused: Obsidian's own index
+      // skips such folders, but a plugin (Hidden Folders Access, for one) can
+      // expose one, and the scan checks the live index either way. Warn now if
+      // the folder is not in the index today, so the reason is known up front.
+      for (const entry of this.plugin.settings.bundleRoots) {
+        const segment = hiddenRootSegment(entry);
+        if (segment && !(this.plugin.app.vault.getAbstractFileByPath(entry.replace(/^\/+|\/+$/g, "")) instanceof TFolder)) {
+          new Notice(
+            `LOKF: "${entry}" sits inside "${segment}", which Obsidian's file index does not currently expose - nothing under it will be scanned until a plugin exposes it, or you open that folder as its own vault.`,
+            10000
+          );
+        }
+      }
+    }
     // Toggling inline diagnostics changes a registered editor extension's
     // behaviour; ask every open editor to reconfigure so it repaints at once
     // rather than on the next keystroke. Escalating a rule to an error changes
@@ -93,33 +102,10 @@ export class LokfSettingTab extends PluginSettingTab {
         heading: "This device",
         items: [
           {
-            name: "Disable LOKF Enforcer on this device",
+            name: "Disable LOKF Registrar on this device",
             desc: "Silence the status bar, inline underlines, autocomplete, and scanning on this device only. Stored per-device and never synced, so the same vault opened on another device keeps its own setting - useful when a vault is synced to a phone.",
             aliases: ["disable", "device", "off", "mobile", "phone", "local", "turn off"],
             control: { type: "toggle", key: "disabledOnDevice" },
-          },
-        ],
-      },
-      {
-        type: "group",
-        heading: "Alternative OKF validator",
-        items: [
-          {
-            // There is no public API for "is plugin X installed" (reading
-            // `app.plugins` is undocumented and flagged in community review),
-            // so this is offered unconditionally rather than only when
-            // "not detected".
-            name: "Install OKF Enforcer",
-            desc: "Opens OKF Enforcer in Obsidian's community-plugin browser, where you install and enable it yourself. Optional: LOKF Enforcer now checks the OKF v0.2 base layer itself, so a dedicated validator is an alternative, not required. LOKF Enforcer never installs, enables, or calls into another plugin. (Not to be confused with LOKF Curator, this plugin's sibling.)",
-            aliases: ["OKF Enforcer", "alternative", "OKF validator", "OKF v0.2"],
-            action: () => {
-              window.open(OKF_ENFORCER_URI);
-            },
-          },
-          {
-            name: "Recommend installing an OKF validator",
-            desc: "Show a one-time notice, on first opening this vault, recommending a dedicated OKF v0.2 validator. Off by default now that LOKF Enforcer covers the OKF v0.2 base layer itself.",
-            control: { type: "toggle", key: "recommendOkfValidator" },
           },
         ],
       },
@@ -292,24 +278,12 @@ export class LokfSettingTab extends PluginSettingTab {
         items: [
           {
             name: "Bundle root folders",
-            desc: "Comma-separated vault-relative folders, each the root of its own bundle (its own index.md, base_iri, ids). Leave blank if the bundle is the whole vault - the usual Obsidian setup, one vault per bundle. List folders here only when one vault holds several independent bundles as sibling project folders; a note outside every listed folder is not scanned.",
+            desc: "Comma-separated vault-relative folders, each the root of its own bundle (its own index.md, base_iri, ids). Leave blank if the bundle is the whole vault - the case when you open a knowledge_bundle doorway as a vault, or any vault that is a bundle outright. Blank also detects the sidecar convention on its own: a top-level knowledge_bundle folder with its own index.md, in a vault whose root index.md has no LOKF header, becomes the bundle root and every note outside it is left alone. List folders here only when one vault holds several independent bundles as sibling project folders; a note outside every listed folder is not scanned. A folder inside a dot-folder is accepted but only scannable if another plugin exposes it to Obsidian's index (the scan says so otherwise).",
             aliases: ["subfolder", "one vault many folders", "bundleRoots", "multiple bundles"],
             control: {
               type: "textarea",
               key: "bundleRoots",
               rows: 2,
-              // A dot-folder entry is silently unscannable rather than wrong-
-              // looking (Obsidian's file index never exposes one), so it is
-              // rejected here with the reason, before it is ever saved.
-              validate: (value) => {
-                for (const entry of parseCsv(String(value ?? ""))) {
-                  const segment = hiddenRootSegment(entry);
-                  if (segment) {
-                    return `"${entry}" sits inside "${segment}" - Obsidian's file index skips folders whose name begins with a dot, so nothing under it can ever be scanned. Open that folder as its own vault instead (File → Open folder as vault).`;
-                  }
-                }
-                return undefined;
-              },
             },
           },
           {

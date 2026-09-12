@@ -1,6 +1,6 @@
 ---
 type: Playbook
-id: https://lokf-enforcer.example/knowledge/playbooks/knowledge-sources
+id: https://lokf-registrar.example/knowledge/playbooks/knowledge-sources
 title: Knowledge Sources
 description: Map of the repository locations this bundle was derived from, and how to re-check each on a future refresh.
 generated:
@@ -26,7 +26,7 @@ generated:
 | PyPI `lokf` package | `.lokf/pyproject.toml`'s `lokf[build]>=` floor | `pip index versions lokf`; bump the floor on a minor/patch release, ask the human first on a major one |
 
 **2026-09-11 re-check**: swept `src/*.ts` against the six-bug fix pass -
-found and corrected drift in `validator-engine.md`, `lokf-enforcer-plugin.md`,
+found and corrected drift in `validator-engine.md`, `lokf-registrar-plugin.md`,
 and `report-view.md` (see `log.md`). Added three new sources this pass first
 surfaced with no concept at all: `.github/dependabot.yml`,
 `knowledge-librarian.yaml`'s two-job security split, and the two new

@@ -1,6 +1,6 @@
 // public-api.ts - the read-only surface other plugins (the sibling Curator, an
 // agent) may read validation state from, without either plugin depending on the
-// other. Reachable at runtime as `app.plugins.plugins["lokf-enforcer"].api`.
+// other. Reachable at runtime as `app.plugins.plugins["lokf-registrar"].api`.
 //
 // Types only, so a consumer can import this file for the shapes without pulling
 // in Obsidian or the rest of the plugin. Everything here is read-only: the API
@@ -20,7 +20,7 @@ export interface LokfFileFindings {
   findings: LokfFinding[];
 }
 
-export interface LokfEnforcerApi {
+export interface LokfRegistrarApi {
   /** The plugin version this API belongs to (from the manifest). */
   readonly version: string;
   /** The findings from the most recent vault scan - a read-only snapshot, empty

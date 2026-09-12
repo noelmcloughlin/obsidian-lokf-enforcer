@@ -1,4 +1,4 @@
-# LOKF Enforcer
+# LOKF Registrar
 
 > Validate the Linked Open Knowledge Format (LOKF) semantic layer on top of OKF v0.2 in Obsidian.
 

@@ -1,6 +1,6 @@
-# `.lokf/` - LOKF Enforcer's machine-readable knowledge base
+# `.lokf/` - LOKF Registrar's machine-readable knowledge base
 
-A small **sidecar** that captures the LOKF Enforcer plugin's own knowledge -
+A small **sidecar** that captures the LOKF Registrar plugin's own knowledge -
 its services, references, glossary, playbooks, and policies - as plain
 Markdown files that are **also a queryable knowledge graph**. It does not
 touch the plugin build; it's independent tooling you can run on its own.
@@ -29,7 +29,7 @@ You write normal Markdown; you get a validated, queryable graph for free.
 |   |-- glossary/         # LOKF, OKF, Diátaxis genre
 |   |-- playbooks/        # knowledge sources, contributing, releasing, quality gates
 |   |-- policies/         # no telemetry
-|   |-- explanation/      # why LOKF Enforcer is a layered add-on
+|   |-- explanation/      # why LOKF Registrar checks in the editor, and why the name
 |-- pyproject.toml        # declares the `lokf` toolkit as a dependency
 |-- justfile              # convenience commands (below)
 |-- scripts/              # knowledge-librarian.sh, the scheduled-agent wrapper

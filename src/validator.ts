@@ -81,7 +81,6 @@ export interface LokfSettings {
   fieldAliases: string[];
   excludeFolders: string[];
   batchSize: number;
-  recommendOkfValidator: boolean;
   /** Underline offending frontmatter values inline, in the editor, with the
    *  finding on hover - the live counterpart to the side report. Off leaves
    *  the editor untouched and the panel the only surface. */
@@ -174,7 +173,6 @@ export const DEFAULT_SETTINGS: LokfSettings = {
   fieldAliases: [],
   excludeFolders: [],
   batchSize: 50,
-  recommendOkfValidator: false,
   inlineDiagnostics: true,
   autocomplete: true,
   bundleRoots: [],
@@ -244,6 +242,21 @@ export function normalizeBundleRoots(roots: string[]): string[] {
  * `normalizeBundleRoots`) - this function does not sort, so it stays cheap to
  * call once per candidate file during a scan.
  */
+/** The conventional visible name of a knowledge bundle at a host's root - the
+ *  doorway `lokf-sidecar` lays down (a link onto `.lokf/knowledge` in a code
+ *  repository; the real folder itself in a vault or shared-folder host). */
+export const VISIBLE_BUNDLE_FOLDER = "knowledge_bundle";
+
+/** With no bundle roots configured, a vault that holds a `knowledge_bundle/`
+ *  folder with its own `index.md`, while its own root `index.md` carries no
+ *  LOKF header, is a notes vault hosting a bundle beside its notes - so that
+ *  folder is the bundle root and every note outside it is left alone, with
+ *  nothing to configure. A vault whose root index.md IS a header stays the
+ *  whole-vault bundle it always was. Pure, so the smoke test can pin it. */
+export function autoBundleRoot(rootIndexHasHeader: boolean, visibleBundleIndexExists: boolean): string | null {
+  return !rootIndexHasHeader && visibleBundleIndexExists ? VISIBLE_BUNDLE_FOLDER : null;
+}
+
 export function resolveBundleRoot(vaultPath: string, roots: string[]): string | null {
   if (roots.length === 0) return "";
   for (const root of roots) {
@@ -959,7 +972,7 @@ export function validateConceptId(data: Record<string, unknown>, path: string, b
 //
 // The §5 fields originated in OKF v0.2 but are defined in the LOKF schema and
 // are the load-bearing substrate of LOKF's curation ceremony (draft → verified
-// → stale), so their *shape* is LOKF Enforcer's business - not the deep
+// → stale), so their *shape* is LOKF Registrar's business - not the deep
 // credibility/tier interpretation, which stays an installed OKF validator's
 // job. Findings are warnings except the two fields OKF marks REQUIRED -
 // `generated.by` (§5.2) and a source's `resource` (§5.1) - which are errors

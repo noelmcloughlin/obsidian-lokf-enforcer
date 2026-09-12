@@ -2,7 +2,7 @@
 
 ## The plugin
 
-LOKF Enforcer runs entirely inside Obsidian, locally, on the vault you open it in:
+LOKF Registrar runs entirely inside Obsidian, locally, on the vault you open it in:
 
 - **No network access, no telemetry, no remote code.** The plugin never makes an outward network call and loads no code or workflow while validating a note.
 - **Read-only unless you ask otherwise.** It reads Markdown/YAML in the open vault and validates frontmatter and relationships. It writes to the vault only when you explicitly run the semantic-header insertion command.
@@ -15,7 +15,7 @@ Any generated or imported bundle content still deserves the same scrutiny you'd 
 
 ## Reporting a vulnerability
 
-Please use GitHub's [private vulnerability reporting](https://github.com/noelmcloughlin/obsidian-lokf-enforcer/security/advisories/new)
+Please use GitHub's [private vulnerability reporting](https://github.com/noelmcloughlin/obsidian-lokf-registrar/security/advisories/new)
 rather than a public issue. Include:
 
 - the affected file (plugin source, or a workflow under `.github/workflows/`);

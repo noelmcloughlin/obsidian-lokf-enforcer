@@ -1,4 +1,4 @@
-// main.ts - LOKF Enforcer plugin entry point
+// main.ts - LOKF Registrar plugin entry point
 import { MarkdownView, Notice, Plugin, TFile, TFolder, type EditorPosition, type TAbstractFile, type WorkspaceLeaf, debounce, parseYaml } from "obsidian";
 import {
   type LokfSettings,
@@ -20,6 +20,9 @@ import {
   RELATION_FIELDS,
   applyFieldAliases,
   applySeverityOverrides,
+  autoBundleRoot,
+  VISIBLE_BUNDLE_FOLDER,
+  mintExpectedId,
 } from "./validator";
 import { LokfReportView, LOKF_VIEW_TYPE, type FileResult } from "./report-view";
 import { locateFrontmatterKey } from "./locator";
@@ -42,17 +45,10 @@ import {
   newDiataxisNote,
   type RelatedLink,
   type DiataxisEntry,
+  type DiataxisHeader,
 } from "./affordances";
-import type { LokfEnforcerApi, LokfFileFindings, LokfFinding } from "./public-api";
+import type { LokfRegistrarApi, LokfFileFindings, LokfFinding } from "./public-api";
 import { ProposeModal } from "./propose-modal";
-
-// OKF-validator detection (below, `detectOkfValidator`) is disabled: it read
-// `app.plugins`, which is not public API and is a routine flag in community
-// plugin review. Left commented rather than deleted since re-enabling it is a
-// straightforward uncomment should a public "is plugin X installed" API ever
-// appear. (OKF Enforcer is an alternative validator, not this plugin's sibling -
-// that is LOKF Curator.)
-// const OKF_VALIDATOR_PLUGIN_ID = "okf-enforcer";
 
 /** Not a LOKF rule - a file the vault refused to hand over. Reported rather
  *  than dropped, so an unreadable note can never read as a clean one. */
@@ -68,7 +64,7 @@ function hiddenRootIssues(root: string, segment: string): LokfIssue[] {
     {
       severity: "error",
       rule: "lokf/io-hidden-root",
-      message: `Bundle root "${root}" sits inside "${segment}", and Obsidian's file index skips every folder whose name begins with a dot - no note under it is visible to this or any plugin, so nothing was scanned. Open that folder as its own vault instead (File → Open folder as vault), or move the bundle to a path with no dot-folder in it.`,
+      message: `Bundle root "${root}" sits inside "${segment}", and Obsidian's file index does not list it - it skips every folder whose name begins with a dot unless a plugin such as Hidden Folders Access exposes one - so no note under it is visible to this or any plugin and nothing was scanned. Open that folder as its own vault instead (File → Open folder as vault), expose it to the index with such a plugin, or lay the bundle down as a visible knowledge_bundle folder.`,
     },
   ];
 }
@@ -80,7 +76,7 @@ function missingBundleRootIssues(root: string): LokfIssue[] {
     {
       severity: "error",
       rule: "lokf/io-missing-root",
-      message: `Bundle root folder "${root}" does not exist in this vault, so nothing under it was scanned. Fix or remove it under Settings → LOKF Enforcer → Bundle root folders (clear the list to treat the whole vault as one bundle).`,
+      message: `Bundle root folder "${root}" does not exist in this vault, so nothing under it was scanned. Fix or remove it under Settings → LOKF Registrar → Bundle root folders (clear the list to treat the whole vault as one bundle).`,
     },
   ];
 }
@@ -102,9 +98,8 @@ export default class LokfPlugin extends Plugin {
   settings: LokfSettings = { ...DEFAULT_SETTINGS };
   statusEl!: HTMLElement;
   /** Read-only surface for the sibling Curator or an agent; see public-api.ts.
-   *  Reachable as `app.plugins.plugins["lokf-enforcer"].api`. */
-  api!: LokfEnforcerApi;
-  private okfValidatorNoticeShown = false;
+   *  Reachable as `app.plugins.plugins["lokf-registrar"].api`. */
+  api!: LokfRegistrarApi;
   private busy = false;
   private hasVerdict = false;
   /** The most recent full scan, retained so reopening the report panel (or the
@@ -152,7 +147,25 @@ export default class LokfPlugin extends Plugin {
       this.bundleRootsRaw = raw;
       this.bundleRootsResolved = normalizeBundleRoots(raw);
     }
-    return this.bundleRootsResolved;
+    if (this.bundleRootsResolved.length) return this.bundleRootsResolved;
+    const detected = this.detectedRoot();
+    return detected ? [detected] : this.bundleRootsResolved;
+  }
+
+  /** With nothing configured, recognise the sidecar convention on its own: a
+   *  top-level `knowledge_bundle/` with its own index.md, in a vault whose
+   *  root index.md carries no LOKF header, is a notes vault hosting a bundle
+   *  beside its notes (lokf-sidecar's visible layout). Two index lookups and a
+   *  metadata-cache read - cheap enough to run per call and never cached, so
+   *  a folder appearing or vanishing takes effect at once. The decision itself
+   *  is validator.ts's pure `autoBundleRoot`. */
+  private detectedRoot(): string | null {
+    const visibleIndex = this.app.vault.getAbstractFileByPath(`${VISIBLE_BUNDLE_FOLDER}/index.md`);
+    if (!(visibleIndex instanceof TFile)) return null;
+    const rootIndex = this.app.vault.getAbstractFileByPath("index.md");
+    const fm = rootIndex instanceof TFile ? this.app.metadataCache.getFileCache(rootIndex)?.frontmatter : undefined;
+    const rootHasHeader = !!fm && (fm["lokf_version"] !== undefined || fm["base_iri"] !== undefined);
+    return autoBundleRoot(rootHasHeader, true);
   }
 
   private resolveRoot(vaultPath: string): string | null {
@@ -394,8 +407,6 @@ export default class LokfPlugin extends Plugin {
     // Active-note panel section stay live alongside the inline underlines.
     this.metaFlush = debounce(() => void this.processPendingMeta(), 400, true);
     this.registerEvent(this.app.metadataCache.on("changed", (file) => this.queueMeta(file.path)));
-
-    this.app.workspace.onLayoutReady(() => this.maybeShowOkfValidatorNotice());
   }
 
   async loadSettings(): Promise<void> {
@@ -417,13 +428,10 @@ export default class LokfPlugin extends Plugin {
         (this.settings as unknown as Record<string, unknown>)[key] = defaults[key];
       }
     }
-    if (typeof saved["okfValidatorNoticeShown"] === "boolean") {
-      this.okfValidatorNoticeShown = saved["okfValidatorNoticeShown"];
-    }
   }
 
   async saveSettings(): Promise<void> {
-    await this.saveData({ ...this.settings, okfValidatorNoticeShown: this.okfValidatorNoticeShown });
+    await this.saveData(this.settings);
   }
 
   // ---- Device-local disable (H) ----
@@ -431,7 +439,7 @@ export default class LokfPlugin extends Plugin {
   /** Stored via app.loadLocalStorage/saveLocalStorage, which are per-vault and
    *  per-device and never synced - so a vault shared to a phone can silence the
    *  plugin there without changing its behaviour on the desktop. */
-  private static readonly DEVICE_DISABLED_KEY = "lokf-enforcer:disabled-on-device";
+  private static readonly DEVICE_DISABLED_KEY = "lokf-registrar:disabled-on-device";
 
   isDisabledOnDevice(): boolean {
     return this.app.loadLocalStorage(LokfPlugin.DEVICE_DISABLED_KEY) === true;
@@ -1073,11 +1081,20 @@ export default class LokfPlugin extends Plugin {
       const genre = typeof raw === "string" ? raw.trim() : "";
       if (genre) entries.push({ genre, linktext: this.app.metadataCache.fileToLinktext(f, mapPath) });
     }
+    // The map lives inside the bundle, so it must be a record the registrar
+    // accepts (`lokf validate` aborts a run on a note with no frontmatter): a
+    // Document with a minted id and this plugin as its `generated` actor.
+    const baseIri = await this.findBaseIriFor(root);
+    const header: DiataxisHeader = {
+      id: baseIri ? mintExpectedId("diataxis.md", baseIri) : null,
+      generatedBy: `lokf-registrar/${this.manifest.version}`,
+      generatedAt: new Date().toISOString().replace(/\.\d{3}Z$/, "Z"),
+    };
     const existing = this.app.vault.getAbstractFileByPath(mapPath);
     if (existing instanceof TFile) {
       let changed = false;
       await this.app.vault.process(existing, (doc) => {
-        const next = applyDiataxisBlock(doc, entries);
+        const next = applyDiataxisBlock(doc, entries, header);
         if (next === null) return doc;
         changed = true;
         return next;
@@ -1085,7 +1102,7 @@ export default class LokfPlugin extends Plugin {
       return changed;
     }
     if (entries.length === 0) return false;
-    await this.app.vault.create(mapPath, newDiataxisNote(entries));
+    await this.app.vault.create(mapPath, newDiataxisNote(entries, header));
     return true;
   }
 
@@ -1235,12 +1252,16 @@ export default class LokfPlugin extends Plugin {
       const configuredRoots = this.bundleRoots().length ? this.bundleRoots() : [""];
       for (const root of configuredRoots) {
         const rootIndexPath = this.rootIndexPathFor(root);
-        const hiddenSegment = hiddenRootSegment(root);
+        // The live index decides: a root Obsidian actually lists is scanned
+        // wherever it sits. Only an absent one is explained - by the dot-folder
+        // rule when that is the likely reason, else as missing.
+        const present = !root || this.app.vault.getAbstractFileByPath(root) instanceof TFolder;
+        const hiddenSegment = present ? null : hiddenRootSegment(root);
         // synthetic: true on all three - none of these paths were part of
         // `files`, so the report view must not count them against "clean".
         if (hiddenSegment) {
           results.push({ path: rootIndexPath, issues: hiddenRootIssues(root, hiddenSegment), synthetic: true });
-        } else if (root && !(this.app.vault.getAbstractFileByPath(root) instanceof TFolder)) {
+        } else if (!present) {
           results.push({ path: rootIndexPath, issues: missingBundleRootIssues(root), synthetic: true });
         } else if (!(this.app.vault.getAbstractFileByPath(rootIndexPath) instanceof TFile)) {
           const issues = missingRootIndexIssues(this.settings, rootIndexPath);
@@ -1494,33 +1515,6 @@ export default class LokfPlugin extends Plugin {
       }
       leaf.view.setActiveResult(this.activeResult);
     }
-  }
-
-  // private detectOkfValidator(): boolean {
-  //   const plugins = (
-  //     this.app as unknown as {
-  //       plugins?: { enabledPlugins?: Set<string>; plugins?: Record<string, unknown> };
-  //     }
-  //   ).plugins;
-  //   try {
-  //     return !!plugins?.enabledPlugins?.has(OKF_VALIDATOR_PLUGIN_ID) || !!plugins?.plugins?.[OKF_VALIDATOR_PLUGIN_ID];
-  //   } catch {
-  //     return false;
-  //   }
-  // }
-
-  /** Shown once, if enabled - there is no reliable, public way to tell whether
-   *  an OKF validator is already installed (see the commented-out
-   *  `detectOkfValidator` above), so this fires unconditionally rather than
-   *  only when "not detected". */
-  private maybeShowOkfValidatorNotice(): void {
-    if (!this.settings.recommendOkfValidator || this.okfValidatorNoticeShown) return;
-    new Notice(
-      "LOKF Enforcer checks the LOKF layer and the OKF v0.2 base layer. A dedicated OKF v0.2 validator (e.g. OKF Enforcer) is an optional alternative for the deeper OKF checks.",
-      10000
-    );
-    this.okfValidatorNoticeShown = true;
-    void this.saveSettings();
   }
 
   /** Which bundle the scaffold command should target: the active note's own

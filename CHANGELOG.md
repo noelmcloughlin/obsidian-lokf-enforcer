@@ -4,6 +4,26 @@ All notable changes to this project are documented here. The format is based on 
 
 No version below has been published as a GitHub release yet, so entries describe development history against `main`, not user-facing upgrades. No tags exist yet either, which is why version headings carry no compare links.
 
+## [Unreleased]
+
+## [0.5.0] - 2026-09-12
+
+### Added
+
+- **Bundle detection for the sidecar convention.** A top-level `knowledge_bundle/` with its own `index.md`, in a vault whose root `index.md` carries no LOKF header, becomes the bundle root with nothing configured - the notes-vault case for `lokf-sidecar`'s visible layout. A vault whose root `index.md` is itself a header stays the whole-vault bundle it always was. Decision logic is the pure, smoke-tested `autoBundleRoot`.
+- **The Diátaxis map is now a record the registrar accepts.** `diataxis.md` gets a `type: Document` header with a minted `id` and `generated` provenance naming the plugin as the OKF §7 producer actor, since `lokf validate` previously aborted a whole run on its missing frontmatter. A map an earlier version wrote without a header gains one on its next refresh; both plugins still treat the file as reserved, never a concept to curate.
+
+### Changed
+
+- **Renamed LOKF Registrar** - id `lokf-registrar`, repository `obsidian-lokf-registrar`, package `@noelmcloughlin/lokf-registrar` - for the role every README already gives the plugin: a registrar keeps records well-formed and their provenance paperwork straight, and says what it finds where an enforcer would block. The old name also sat one letter from an unrelated community plugin's. Nothing was published under it, so there is no migration to carry: settings live in `.obsidian/plugins/lokf-registrar/`, the read-only API at `app.plugins.plugins["lokf-registrar"].api`, the device-local switch under `lokf-registrar:disabled-on-device`, and a `diataxis.md` map is stamped `generated.by: lokf-registrar/<version>` - a map an earlier build stamped `lokf-enforcer/<version>` is still recognised as the plugin's own and re-stamped on its next refresh (smoke-tested). The bundle under `.lokf/` follows: namespace `lokf-registrar.example`, `services/lokf-registrar-plugin.md`, `explanation/why-lokf-registrar.md` (with a "Why the name" section). `NOTICE` no longer describes the plugin as a companion to a separate OKF validator.
+- **A dot-folder bundle root is accepted, not refused** - a community plugin (Hidden Folders Access) can expose one to Obsidian's index. The scan checks the live index first and explains an absent root instead of assuming; saving such an entry warns if the index doesn't list it today.
+- **"How this fits" rewritten** around one desk that is always the person's: this plugin is the registrar there, LOKF Curator the curator's assistant. Covers both ways of reaching it - the doorway opened as its own vault (Obsidian skips a symlink that resolves inside the vault it's indexing, so open the link itself, never the repository root), or the real `knowledge_bundle/` folder found inside your own vault with nothing to configure - names the vault the **workshop** and the bundle the **exhibition**, and trims repeated sentences; the alternative-plugins footnote is two lines. *Promote body links to typed relations…* is described as the hand-authoring aid for a bundle no agent maintains, and the plugin's writes are named for what they are - on explicit command, to the form of a record, never a claim.
+- The frozen template fixture is now `scripts/fixtures/sidecar-skeleton/`, matching the upstream skill's rename from `lokf-scaffolding`; the smoke test's first header fixture is a neutral example rather than a copy of another project's `index.md`.
+
+### Removed
+
+- The **Alternative OKF validator** settings group - its community-plugin deep link and one-time notice - now that the OKF v0.2 base layer is checked here directly. A separate validator is an alternative, not a companion, and gets one line in the README's "Alternative plugins" footnote instead. A saved `recommendOkfValidator` / `okfValidatorNoticeShown` in an existing `data.json` is ignored.
+
 ## [0.4.0] - 2026-09-12
 
 ### Added

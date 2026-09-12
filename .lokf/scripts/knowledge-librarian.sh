@@ -12,7 +12,7 @@
 # CONTRACT (the workflow relies on this):
 #   - This script only READS the repo and WRITES files under .lokf/knowledge/
 #     (the workflow diffs and commits that path only; tooling files are
-#     lokf-scaffolding's domain).
+#     lokf-sidecar's domain).
 #   - It MUST NOT git commit, push, or open PRs - the workflow owns that.
 #   - On success it exits 0 whether or not it changed anything; the workflow
 #     diffs the working tree to decide whether to open a PR.
@@ -106,10 +106,13 @@ fi
 # Defence in depth: the prompt asks the agent to edit only .lokf/knowledge/, but
 # nothing forces it. Record paths already dirty outside the bundle (e.g. a
 # uv.lock the workflow refreshed) so the agent is held to account only for *new*
-# ones. Allowed: .lokf/knowledge/ and lokf-docent's .lokf/feedback.md.
+# ones. Allowed: the bundle under either of its two names - .lokf/knowledge/,
+# and knowledge_bundle/ when that is the real folder and .lokf/knowledge the
+# link onto it (lokf-sidecar's visible layout; git pathspecs do not traverse a
+# symlink, so both must be named) - plus lokf-docent's .lokf/feedback.md.
 outside_bundle() {
   git status --porcelain -- '.' \
-    ':(exclude).lokf/knowledge' ':(exclude).lokf/feedback.md' \
+    ':(exclude).lokf/knowledge' ':(exclude)knowledge_bundle' ':(exclude).lokf/feedback.md' \
     | cut -c4- | sort -u
 }
 before_outside="$(outside_bundle)"

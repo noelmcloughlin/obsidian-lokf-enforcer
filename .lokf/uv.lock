@@ -1069,7 +1069,7 @@ build = [
 ]
 
 [[package]]
-name = "lokf-enforcer-knowledge"
+name = "lokf-registrar-knowledge"
 version = "0.1.0"
 source = { virtual = "." }
 dependencies = [

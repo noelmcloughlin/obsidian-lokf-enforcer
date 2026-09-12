@@ -1,11 +1,11 @@
 ---
 type: Playbook
-id: https://lokf-enforcer.example/knowledge/playbooks/scheduled-librarian
+id: https://lokf-registrar.example/knowledge/playbooks/scheduled-librarian
 title: Scheduled Librarian
 description: The knowledge-librarian.yaml workflow's two-job privilege split - how a third-party agent proposes bundle changes without ever holding a write-scoped token.
 resource: .github/workflows/knowledge-librarian.yaml
 dependsOn:
-  - https://lokf-enforcer.example/knowledge/references/lokf-toolkit
+  - https://lokf-registrar.example/knowledge/references/lokf-toolkit
 generated:
   by: process:lokf-librarian
   at: "2026-09-11T12:00:00Z"

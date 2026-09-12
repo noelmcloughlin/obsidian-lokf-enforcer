@@ -29,7 +29,7 @@ sample-vault/
 
 # Installed agent skills are runtime state, not source (the LOKF skills' own
 # hygiene note). CI installs the pinned lokf-librarian skill at run time, and
-# the smoke test reads a frozen copy of the scaffolding skeleton from
+# the smoke test reads a frozen copy of the lokf-sidecar template skeleton from
 # scripts/fixtures/, so nothing here needs to be committed.
 .agents/
 .claude/

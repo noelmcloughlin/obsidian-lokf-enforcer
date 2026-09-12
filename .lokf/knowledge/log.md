@@ -1,5 +1,62 @@
 # Change Log
 
+## 2026-09-12 (3)
+
+* **Renamed** (maintainer decision): the plugin is **LOKF Registrar**, id
+  `lokf-registrar`, repository `obsidian-lokf-registrar` - the name now says
+  the role this bundle already gave it. Bundle-wide: the placeholder
+  namespace is `https://lokf-registrar.example/knowledge/` and every `id`
+  and relation target is re-minted under it; `services/lokf-enforcer-plugin.md`
+  moved to `services/lokf-registrar-plugin.md` and
+  `explanation/why-lokf-enforcer.md` to `explanation/why-lokf-registrar.md`,
+  ids and titles with them; `index.md` retitled. `why-lokf-registrar.md`
+  gains a "Why the name" section and `lokf-registrar-plugin.md` an
+  "Identity" section (API path, device key, `generated.by` actor, and that
+  a map stamped `lokf-enforcer/<version>` by an earlier build is still
+  recognised as the plugin's own); both `generated` refreshed. `NOTICE` no
+  longer calls the plugin a companion to a separate OKF validator - it
+  checks the base layer itself. `references/okf-specification.md` corrected
+  in passing: the plugin has checked required `type` and Attested Computation
+  shape itself since 0.4.0, which that concept still denied. Entries below keep
+  the names in use at the time.
+
+## 2026-09-12 (2)
+
+* **Corrected** `services/lokf-enforcer-plugin.md`, `services/settings-tab.md`,
+  `references/commands-and-settings.md` after the maintainer had the
+  afternoon's feature-fit audit implemented: `diataxis.md` is now written as a
+  `Document` with a minted `id` and `generated.by: lokf-enforcer/<version>`
+  (the earlier headerless map made `lokf validate` abort a run); with no
+  bundle roots configured a top-level `knowledge_bundle/` is detected on its
+  own (`autoBundleRoot`); a dot-folder root is accepted with a live-index
+  check and a warning instead of being refused. The `## Open questions`
+  section on the plugin concept is replaced by the record of what changed.
+
+* **Corrected** `services/lokf-enforcer-plugin.md`, `services/settings-tab.md`,
+  `references/commands-and-settings.md`, and rewrote
+  `explanation/why-lokf-enforcer.md`: the plugin no longer detects,
+  recommends, or deep-links to any other OKF validator. The commented-out
+  `detectOkfValidator`, the one-time notice (`recommendOkfValidator` /
+  `okfValidatorNoticeShown`), and the "Alternative OKF validator" settings
+  group were removed from `src/main.ts`, `src/settings.ts`, and
+  `src/validator.ts` at the maintainer's direction: with the OKF v0.2 base
+  layer checked here, a separate validator is an *alternative* worth a
+  footnote, not a companion, and the only plugin this one names is its
+  sibling LOKF Curator. `README.md` was restructured the same day around how
+  an Obsidian user actually meets a bundle (the bundle is the vault; a folder
+  in the vault; derived from a repository and opened via `knowledge_bundle`)
+  and now states, per Obsidian's own help on symbolic links, that a
+  repository root opened as a vault cannot reach the bundle through the
+  link - the previous README's contrary claim was wrong. The smoke test's
+  first header fixture, formerly a verbatim copy of another project's
+  `index.md`, is now a neutral example; the frozen template fixture moved
+  from `scripts/fixtures/scaffolding-skeleton/` to
+  `scripts/fixtures/sidecar-skeleton/` to follow the upstream skill's rename
+  from `lokf-scaffolding` to `lokf-sidecar`. Command table in
+  `references/commands-and-settings.md` extended to the commands the README
+  documents. Not a full steady-state sweep - concepts untouched by these
+  changes were not re-checked.
+
 ## 2026-09-11 (2)
 
 * **Corrected** `services/validator-engine.md`, `services/lokf-enforcer-plugin.md`,

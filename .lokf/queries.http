@@ -1,4 +1,4 @@
-### LOKF SPARQL queries for the LOKF Enforcer knowledge bundle.
+### LOKF SPARQL queries for the LOKF Registrar knowledge bundle.
 ###
 ### Requires a VS Code "REST Client" extension (humao.rest-client).
 ### Start the endpoint first (from this directory):
@@ -25,7 +25,7 @@ Content-Type: application/sparql-query
 
 SELECT ?title ?predicate ?target
 WHERE {
-  ?s schema:name "LOKF Enforcer Plugin" .
+  ?s schema:name "LOKF Registrar Plugin" .
   ?s ?predicate ?target .
   ?target schema:name ?title .
   FILTER(?predicate IN (dcterms:requires, schema:hasPart, dcterms:isPartOf))

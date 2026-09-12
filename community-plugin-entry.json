@@ -1,7 +1,7 @@
 {
-  "id": "lokf-enforcer",
-  "name": "LOKF Enforcer",
+  "id": "lokf-registrar",
+  "name": "LOKF Registrar",
   "author": "Noel McLoughlin",
   "description": "Catch broken note links, missing properties, invalid note types in your frontmatter as you write, so your vault stays a clean shared knowledge graph. Fills a Registrar role for Linked Open Knowledge Format (LOKF), a semantic OKF layer.",
-  "repo": "noelmcloughlin/obsidian-lokf-enforcer"
+  "repo": "noelmcloughlin/obsidian-lokf-registrar"
 }

@@ -1,6 +1,6 @@
 ---
 type: Reference
-id: https://lokf-enforcer.example/knowledge/references/lokf-specification
+id: https://lokf-registrar.example/knowledge/references/lokf-specification
 title: LOKF Specification
 description: The Linked Open Knowledge Format specification - a semantic profile of OKF binding fields and relationships to schema.org/DCAT/PROV-O.
 resource: https://lokf.nolan-nichols.com/specification/

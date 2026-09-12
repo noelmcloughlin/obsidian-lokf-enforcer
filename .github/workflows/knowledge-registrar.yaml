@@ -8,6 +8,7 @@ on:
   pull_request:
     paths:
       - ".lokf/**"
+      - "knowledge_bundle/**" # the bundle's visible name, when it is the real folder
       - ".github/workflows/knowledge-registrar.yaml"
   schedule:
     - cron: "0 6 * * 1" # Mondays at 06:00 UTC

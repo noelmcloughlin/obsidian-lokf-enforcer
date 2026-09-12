@@ -1,11 +1,11 @@
 ---
 type: Playbook
-id: https://lokf-enforcer.example/knowledge/playbooks/quality-gates
+id: https://lokf-registrar.example/knowledge/playbooks/quality-gates
 title: Quality Gates
 description: The lint-and-docs CI workflow - shell, workflow, Markdown, link, and spelling checks that run on every push and PR, independent of the Node build and the LOKF bundle's own validation.
 resource: .github/workflows/lint-and-docs.yaml
 dependsOn:
-  - https://lokf-enforcer.example/knowledge/references/obsidian-plugin-guidelines
+  - https://lokf-registrar.example/knowledge/references/obsidian-plugin-guidelines
 generated:
   by: process:lokf-librarian
   at: "2026-09-11T12:00:00Z"
