@@ -6,27 +6,38 @@ No version below has been published as a GitHub release yet, so entries describe
 
 ## [Unreleased]
 
+### Changed
+
+- **A vault with no bundle is left alone.** With nothing configured, a root `index.md` carrying a LOKF header makes the whole vault the bundle and a top-level `knowledge_bundle/` makes that the bundle, as before; a vault with neither now has *no bundle* - nothing scanned, no root-header warning, status bar *LOKF: no bundle*, commands explain instead of acting - rather than being read as one whole-vault bundle. The workshop is never mistaken for the exhibition.
+- **Insert the bundle's semantic header** (was *Insert semantic header template into root index.md*): in a vault with no bundle it now creates `knowledge_bundle/` and puts the header in its `index.md` instead of decorating the vault root.
+- README trimmed: the *For the curious* section is now `docs/for-the-curious.md`.
+
 ### Added
 
-- **Semantic-release, hardened.** [`semantic-release.yml`](.github/workflows/semantic-release.yml) computes the next version from Conventional Commits on `main` and promotes this file's own `## [Unreleased]` section into a dated heading, via a new, dependency-free `.github/scripts/changelog-release.mjs` run as the tool's own `verifyRelease`/`generateNotes`/`prepare` hooks - refusing to release anything left undocumented. `manifest.json`/`package.json`/`versions.json` bump exactly as `npm version` already did by hand. `release.yml` gains a `workflow_call` trigger so the resulting tag reaches it without relying on a `GITHUB_TOKEN`-pushed tag re-triggering its own `push:` event (GitHub suppresses that); a hand-pushed tag still goes through the same, unchanged path. semantic-release itself is installed at exact pinned versions in the workflow, never added to `package.json`, so the release tool's dependency tree stays out of every `npm ci` in `build.yml`. The write-scoped job sits behind the `release` GitHub Environment - configure required reviewers on it in this repository's Settings → Environments. See `CONTRIBUTING.md`'s "Releasing" section for the maintainer-facing flow.
+- **Treat the vault root as the bundle** (Scope, off by default): the break-glass switch that restores the old whole-vault reading for a vault whose root `index.md` carries no LOKF header.
+
+### Fixed
+
+- `npm run lint` and `tsc` failed on `scripts/smoke-test.ts`'s `js-yaml` import and on `.github/scripts/changelog-release.mjs` (outside ESLint's project); both now pass.
 
 ## [0.5.0] - 2026-09-12
 
 ### Added
 
-- **Bundle detection for the sidecar convention.** A top-level `knowledge_bundle/` with its own `index.md`, in a vault whose root `index.md` carries no LOKF header, becomes the bundle root with nothing configured - the notes-vault case for `lokf-sidecar`'s visible layout. A vault whose root `index.md` is itself a header stays the whole-vault bundle it always was. Decision logic is the pure, smoke-tested `autoBundleRoot`.
-- **The Diátaxis map is now a record the registrar accepts.** `diataxis.md` gets a `type: Document` header with a minted `id` and `generated` provenance naming the plugin as the OKF §7 producer actor, since `lokf validate` previously aborted a whole run on its missing frontmatter. A map an earlier version wrote without a header gains one on its next refresh; both plugins still treat the file as reserved, never a concept to curate.
+- **Bundle detection for the sidecar convention.** A top-level `knowledge_bundle/` with its own `index.md`, in a vault whose root `index.md` carries no LOKF header, becomes the bundle root with nothing configured. A vault whose root `index.md` is itself a header stays the whole-vault bundle it always was.
+- **The Diátaxis map is a record the registrar accepts.** `diataxis.md` now carries a `type: Document` header with a minted `id` and `generated` provenance naming the plugin; without one, `lokf validate` aborted the whole run. An older headerless map gains a header on its next refresh.
+- **Semantic release.** The version is computed from Conventional Commits on `main`, and `CHANGELOG.md`'s `## [Unreleased]` section is promoted into a dated heading and used as the release notes; `manifest.json`, `package.json` and `versions.json` bump as they always did. The resulting tag runs the same build, attestation and draft release as before, and a hand-pushed tag still does too. See [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ### Changed
 
-- **Renamed LOKF Registrar** - id `lokf-registrar`, repository `obsidian-lokf-registrar`, package `@noelmcloughlin/lokf-registrar` - for the role every README already gives the plugin: a registrar keeps records well-formed and their provenance paperwork straight, and says what it finds where an enforcer would block. The old name also sat one letter from an unrelated community plugin's. Nothing was published under it, so there is no migration to carry: settings live in `.obsidian/plugins/lokf-registrar/`, the read-only API at `app.plugins.plugins["lokf-registrar"].api`, the device-local switch under `lokf-registrar:disabled-on-device`, and a `diataxis.md` map is stamped `generated.by: lokf-registrar/<version>` - a map an earlier build stamped `lokf-enforcer/<version>` is still recognised as the plugin's own and re-stamped on its next refresh (smoke-tested). The bundle under `.lokf/` follows: namespace `lokf-registrar.example`, `services/lokf-registrar-plugin.md`, `explanation/why-lokf-registrar.md` (with a "Why the name" section). `NOTICE` no longer describes the plugin as a companion to a separate OKF validator.
-- **A dot-folder bundle root is accepted, not refused** - a community plugin (Hidden Folders Access) can expose one to Obsidian's index. The scan checks the live index first and explains an absent root instead of assuming; saving such an entry warns if the index doesn't list it today.
-- **"How this fits" rewritten** around one desk that is always the person's: this plugin is the registrar there, LOKF Curator the curator's assistant. Covers both ways of reaching it - the doorway opened as its own vault (Obsidian skips a symlink that resolves inside the vault it's indexing, so open the link itself, never the repository root), or the real `knowledge_bundle/` folder found inside your own vault with nothing to configure - names the vault the **workshop** and the bundle the **exhibition**, and trims repeated sentences; the alternative-plugins footnote is two lines. *Promote body links to typed relations…* is described as the hand-authoring aid for a bundle no agent maintains, and the plugin's writes are named for what they are - on explicit command, to the form of a record, never a claim.
-- The frozen template fixture is now `scripts/fixtures/sidecar-skeleton/`, matching the upstream skill's rename from `lokf-scaffolding`; the smoke test's first header fixture is a neutral example rather than a copy of another project's `index.md`.
+- **Renamed LOKF Registrar** - id `lokf-registrar`, repository `obsidian-lokf-registrar` - for the role the READMEs already gave it, and to stop shadowing an unrelated community plugin one letter away. Nothing was published under the old name, so there is no migration: settings live in `.obsidian/plugins/lokf-registrar/` and the read-only API at `app.plugins.plugins["lokf-registrar"].api`. A `diataxis.md` map stamped by an earlier build is still recognised as this plugin's own.
+- **A dot-folder bundle root is accepted, not refused** - a community plugin can expose one to Obsidian's index. The scan checks the live index first and explains an absent root instead of assuming.
+- **"How this fits" rewritten** around one desk that is always the person's: this plugin is the registrar there, LOKF Curator the curator's assistant. It covers both ways of reaching a bundle - the doorway opened as its own vault, or a real `knowledge_bundle/` folder inside your own vault - and names the vault the **workshop**, the bundle the **exhibition**.
+- The frozen template fixture is now `scripts/fixtures/sidecar-skeleton/`, matching the upstream skill's rename from `lokf-scaffolding`.
 
 ### Removed
 
-- The **Alternative OKF validator** settings group - its community-plugin deep link and one-time notice - now that the OKF v0.2 base layer is checked here directly. A separate validator is an alternative, not a companion, and gets one line in the README's "Alternative plugins" footnote instead. A saved `recommendOkfValidator` / `okfValidatorNoticeShown` in an existing `data.json` is ignored.
+- The **Alternative OKF validator** settings group, its community-plugin deep link and its one-time notice, now that the OKF v0.2 base layer is checked here directly. A saved `recommendOkfValidator` / `okfValidatorNoticeShown` is ignored.
 
 ## [0.4.0] - 2026-09-12
 

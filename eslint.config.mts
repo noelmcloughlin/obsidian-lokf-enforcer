@@ -8,6 +8,9 @@ export default defineConfig(
 		'dist',
 		'esbuild.config.mjs',
 		'version-bump.mjs',
+		// Node-side release tooling, like the two above: run by semantic-release.yml
+		// (its dry-run executes it on every PR), not part of the plugin bundle.
+		'.github/scripts/changelog-release.mjs',
 		'scripts/build-vocab.mjs',
 		'versions.json',
 		'main.js',

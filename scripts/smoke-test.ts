@@ -9,7 +9,14 @@
 import { readFileSync, readdirSync, statSync, existsSync } from "node:fs";
 import { join, relative, sep } from "node:path";
 import { fileURLToPath } from "node:url";
-import { load as loadYaml } from "js-yaml";
+import { createRequire } from "node:module";
+
+// js-yaml is loaded as CommonJS and typed by hand: its @types package ships an
+// ESM typings file that re-exports itself, and under this project's module
+// settings that sends both tsc and type-aware ESLint round in circles (tsc
+// rejects the named import; ESLint never finishes the file).
+const cjs = createRequire(import.meta.url);
+const { load: loadYaml } = cjs("js-yaml") as { load: (source: string) => unknown };
 import {
   validateLokfConcept,
   missingRootIndexIssues,
@@ -31,7 +38,7 @@ import {
   DEFAULT_SETTINGS,
   type LokfIssue,
   type LokfSettings,
-  autoBundleRoot,
+  implicitBundleRoots,
   VISIBLE_BUNDLE_FOLDER,
 } from "../src/validator";
 import { locateFrontmatterKey, locationToDocRange } from "../src/locator";
@@ -310,9 +317,14 @@ section("normalizeBundleRoots: normalizes, dedupes, sorts longest-first", () => 
 
 section("resolveBundleRoot: which configured bundle a path belongs to", () => {
   expect(
-    "no roots configured: every path is the implicit whole-vault bundle",
-    resolveBundleRoot("anything/at/all.md", []) === "",
+    "no roots at all means no bundle: every path resolves to null, not to the vault root",
+    resolveBundleRoot("anything/at/all.md", []) === null,
     String(resolveBundleRoot("anything/at/all.md", []))
+  );
+  expect(
+    "the explicit whole-vault root (\"\") matches every path",
+    resolveBundleRoot("anything/at/all.md", [""]) === "" && resolveBundleRoot("index.md", [""]) === "",
+    String(resolveBundleRoot("anything/at/all.md", [""]))
   );
 
   const single = normalizeBundleRoots(["knowledge"]);
@@ -1131,10 +1143,14 @@ section("affordances - Diátaxis map groups by genre across all four quadrants",
 });
 
 
-section("auto-detected bundle root: the sidecar convention, only when the vault root is not itself a bundle", () => {
-  expect("knowledge_bundle/index.md in a plain notes vault becomes the root", autoBundleRoot(false, true) === VISIBLE_BUNDLE_FOLDER, String(autoBundleRoot(false, true)));
-  expect("a vault whose root index.md carries a header stays the whole-vault bundle", autoBundleRoot(true, true) === null, String(autoBundleRoot(true, true)));
-  expect("nothing to detect without the visible folder's index.md", autoBundleRoot(false, false) === null, String(autoBundleRoot(false, false)));
+section("implicit bundle roots: the vault says what it is; a workshop with no exhibition is left alone", () => {
+  const j = (x: unknown) => JSON.stringify(x);
+  expect("a root index.md carrying a header makes the whole vault the bundle", j(implicitBundleRoots(true, false, false)) === j([""]), j(implicitBundleRoots(true, false, false)));
+  expect("…and wins over a knowledge_bundle/ folder inside it", j(implicitBundleRoots(true, true, false)) === j([""]), j(implicitBundleRoots(true, true, false)));
+  expect("knowledge_bundle/index.md in a plain notes vault becomes the root", j(implicitBundleRoots(false, true, false)) === j([VISIBLE_BUNDLE_FOLDER]), j(implicitBundleRoots(false, true, false)));
+  expect("neither header nor folder: no bundle, nothing scanned", j(implicitBundleRoots(false, false, false)) === j([]), j(implicitBundleRoots(false, false, false)));
+  expect("break-glass: the same vault read as one whole-vault bundle", j(implicitBundleRoots(false, false, true)) === j([""]), j(implicitBundleRoots(false, false, true)));
+  expect("break-glass does not override a detected knowledge_bundle/", j(implicitBundleRoots(false, true, true)) === j([VISIBLE_BUNDLE_FOLDER]), j(implicitBundleRoots(false, true, true)));
   expect("the convention's name is the one lokf-sidecar lays down", VISIBLE_BUNDLE_FOLDER === "knowledge_bundle", VISIBLE_BUNDLE_FOLDER);
 });
 

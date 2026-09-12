@@ -68,8 +68,9 @@ export class LokfSettingTab extends PluginSettingTab {
     await this.plugin.saveSettings();
     // A cached base_iri may belong to a root that no longer exists in this
     // shape once the set of bundle roots changes.
+    if (key === "treatVaultRootAsBundle") this.plugin.scopeChanged();
     if (key === "bundleRoots") {
-      this.plugin.invalidateBaseIriCache();
+      this.plugin.scopeChanged();
       // A dot-folder root is accepted rather than refused: Obsidian's own index
       // skips such folders, but a plugin (Hidden Folders Access, for one) can
       // expose one, and the scan checks the live index either way. Warn now if
@@ -285,6 +286,12 @@ export class LokfSettingTab extends PluginSettingTab {
               key: "bundleRoots",
               rows: 2,
             },
+          },
+          {
+            name: "Treat the vault root as the bundle (break-glass)",
+            desc: "Off by default, and meant to stay off. With no bundle root folders listed, what is in the vault decides: a root index.md with a LOKF header makes the whole vault the bundle; otherwise a top-level knowledge_bundle folder is the bundle; otherwise the vault has no bundle - nothing is scanned or warned about, and the header command creates a knowledge_bundle folder for you. Turn this on only if you want the whole vault checked anyway - it really is one bundle and its root index.md just has no LOKF header yet, or you would rather have every note checked.",
+            aliases: ["whole vault", "no bundle", "workshop", "treatVaultRootAsBundle", "plain OKF"],
+            control: { type: "toggle", key: "treatVaultRootAsBundle" },
           },
           {
             name: "Excluded folders",

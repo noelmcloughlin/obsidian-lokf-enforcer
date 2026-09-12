@@ -13,6 +13,7 @@ import {
   hiddenRootSegment,
   normalizeBundleRoots,
   resolveBundleRoot,
+  implicitBundleRoots,
   bundleRootIndexPath,
   toBundlePath,
   toVaultPath,
@@ -20,7 +21,6 @@ import {
   RELATION_FIELDS,
   applyFieldAliases,
   applySeverityOverrides,
-  autoBundleRoot,
   VISIBLE_BUNDLE_FOLDER,
   mintExpectedId,
 } from "./validator";
@@ -110,7 +110,7 @@ export default class LokfPlugin extends Plugin {
   private validatedCallbacks = new Set<() => void>();
   private activeResult: { path: string; issues: LokfIssue[] } | null = null;
   /** One base_iri per configured bundle root, keyed by that root's normalized
-   *  path ("" for the implicit whole-vault bundle). Re-reading a root index
+   *  path ("" when the whole vault is the bundle). Re-reading a root index
    *  for every note opened in its bundle made two vault reads out of each
    *  file-open; absence of a key means "not loaded yet", not "no base_iri". */
   private baseIriCache = new Map<string, string | null>();
@@ -148,24 +148,39 @@ export default class LokfPlugin extends Plugin {
       this.bundleRootsResolved = normalizeBundleRoots(raw);
     }
     if (this.bundleRootsResolved.length) return this.bundleRootsResolved;
-    const detected = this.detectedRoot();
-    return detected ? [detected] : this.bundleRootsResolved;
+    return this.implicitRoots();
   }
 
-  /** With nothing configured, recognise the sidecar convention on its own: a
-   *  top-level `knowledge_bundle/` with its own index.md, in a vault whose
-   *  root index.md carries no LOKF header, is a notes vault hosting a bundle
-   *  beside its notes (lokf-sidecar's visible layout). Two index lookups and a
+  /** With nothing configured, let the vault say what it is: a root index.md
+   *  carrying a LOKF header makes the whole vault the bundle; a top-level
+   *  `knowledge_bundle/` with its own index.md is a notes vault hosting a
+   *  bundle beside its notes (lokf-sidecar's visible layout); neither is a
+   *  workshop with no exhibition, and the plugin stays out of it unless the
+   *  break-glass setting says otherwise. Two index lookups and a
    *  metadata-cache read - cheap enough to run per call and never cached, so
-   *  a folder appearing or vanishing takes effect at once. The decision itself
-   *  is validator.ts's pure `autoBundleRoot`. */
-  private detectedRoot(): string | null {
-    const visibleIndex = this.app.vault.getAbstractFileByPath(`${VISIBLE_BUNDLE_FOLDER}/index.md`);
-    if (!(visibleIndex instanceof TFile)) return null;
+   *  a folder or header appearing or vanishing takes effect at once. The
+   *  decision itself is validator.ts's pure `implicitBundleRoots`. */
+  private implicitRoots(): string[] {
     const rootIndex = this.app.vault.getAbstractFileByPath("index.md");
     const fm = rootIndex instanceof TFile ? this.app.metadataCache.getFileCache(rootIndex)?.frontmatter : undefined;
     const rootHasHeader = !!fm && (fm["lokf_version"] !== undefined || fm["base_iri"] !== undefined);
-    return autoBundleRoot(rootHasHeader, true);
+    const visibleIndex = this.app.vault.getAbstractFileByPath(`${VISIBLE_BUNDLE_FOLDER}/index.md`);
+    return implicitBundleRoots(rootHasHeader, visibleIndex instanceof TFile, this.settings.treatVaultRootAsBundle);
+  }
+
+  /** True when nothing is configured, nothing was detected, and the
+   *  break-glass setting is off: a notes vault with no bundle in it. */
+  hasNoBundle(): boolean {
+    return this.bundleRoots().length === 0;
+  }
+
+  /** The one message for a vault with no bundle, worded for the command that
+   *  hit it. */
+  private noBundleNotice(): void {
+    new Notice(
+      "LOKF: this vault has no knowledge bundle - no knowledge_bundle folder with an index.md, and no LOKF header on the root index.md - so there is nothing to check. Run \"Insert the bundle's semantic header\" to create one, or turn on Settings → Scope and performance → Treat the vault root as the bundle to check the whole vault anyway.",
+      12000
+    );
   }
 
   private resolveRoot(vaultPath: string): string | null {
@@ -176,10 +191,9 @@ export default class LokfPlugin extends Plugin {
     return bundleRootIndexPath(root);
   }
 
-  /** True for any path inside some configured bundle (or every path, when no
-   *  roots are configured and the bundle is the vault itself). Notes outside
-   *  every bundle are never scanned - matching an Obsidian-native vault where
-   *  each bundle is one project folder among several siblings. */
+  /** True for any path inside some bundle - configured, detected, or the whole
+   *  vault when its root index.md is a header. Notes outside every bundle,
+   *  and every note of a vault that has no bundle, are never scanned. */
   private isInBundle(vaultPath: string): boolean {
     return this.resolveRoot(vaultPath) !== null;
   }
@@ -219,7 +233,7 @@ export default class LokfPlugin extends Plugin {
     });
     this.addCommand({
       id: "scaffold-root-header",
-      name: "Insert semantic header template into root index.md",
+      name: "Insert the bundle's semantic header (creates knowledge_bundle/ in a vault with no bundle)",
       callback: () => {
         if (this.blockedOnDevice()) return;
         void this.scaffoldRootHeader();
@@ -501,7 +515,6 @@ export default class LokfPlugin extends Plugin {
   private invalidateBaseIri(path: string): void {
     const roots = new Set(this.baseIriCache.keys());
     for (const r of this.bundleRoots()) roots.add(r);
-    if (roots.size === 0) roots.add("");
     for (const root of roots) {
       const index = this.rootIndexPathFor(root);
       if (index === path || index.startsWith(path + "/")) this.baseIriCache.delete(root);
@@ -513,6 +526,14 @@ export default class LokfPlugin extends Plugin {
    *  longer exists in that shape - simplest to drop the whole cache. */
   invalidateBaseIriCache(): void {
     this.baseIriCache.clear();
+  }
+
+  /** Called from the settings tab when what counts as a bundle changes (the
+   *  roots list, or the break-glass whole-vault toggle): the status bar's
+   *  "no bundle" reading is derived, not stored, so it needs a nudge. */
+  scopeChanged(): void {
+    this.invalidateBaseIriCache();
+    this.refreshStatus();
   }
 
   /** Null = the vault could not hand the file over. For the single-file paths,
@@ -857,6 +878,10 @@ export default class LokfPlugin extends Plugin {
    *  file at write time through `vault.process` so offsets are always valid. */
   private async fixVault(): Promise<void> {
     if (this.blockedOnDevice()) return;
+    if (this.hasNoBundle()) {
+      this.noBundleNotice();
+      return;
+    }
     const files = this.candidateFiles();
     const roots = [...new Set(files.map((f) => this.resolveRoot(f.path) ?? ""))];
     await Promise.all(roots.map((r) => this.findBaseIriFor(r)));
@@ -1009,6 +1034,10 @@ export default class LokfPlugin extends Plugin {
    *  bundle's Diátaxis map, behind one confirmation - the bulk projection. */
   private async generateAffordances(): Promise<void> {
     if (this.blockedOnDevice()) return;
+    if (this.hasNoBundle()) {
+      this.noBundleNotice();
+      return;
+    }
     const files = this.candidateFiles();
     const roots = [...new Set(files.map((f) => this.resolveRoot(f.path) ?? ""))];
     await Promise.all(roots.map((r) => this.findBaseIriFor(r)));
@@ -1058,7 +1087,8 @@ export default class LokfPlugin extends Plugin {
     if (this.blockedOnDevice()) return;
     const file = this.app.workspace.getActiveFile();
     if (!file || !this.isConcept(file)) {
-      new Notice("LOKF: open a note in a bundle first to choose which one to map.");
+      if (this.hasNoBundle()) this.noBundleNotice();
+      else new Notice("LOKF: open a note in a bundle first to choose which one to map.");
       return;
     }
     const root = this.resolveRoot(file.path) ?? "";
@@ -1221,6 +1251,11 @@ export default class LokfPlugin extends Plugin {
       if (!silent) new Notice("LOKF: a scan is already running…");
       return;
     }
+    if (this.hasNoBundle()) {
+      if (!silent) this.noBundleNotice();
+      this.refreshStatus();
+      return;
+    }
     this.busy = true;
     try {
       const files = this.candidateFiles();
@@ -1247,10 +1282,9 @@ export default class LokfPlugin extends Plugin {
       // Findings no single note can carry, ordered by what actually went wrong:
       // an unreachable bundle root already explains an empty scan, so adding
       // "no index.md" on top of it would only blame the wrong thing. Runs once
-      // per configured root, or once for the implicit whole-vault root when
-      // none are configured.
-      const configuredRoots = this.bundleRoots().length ? this.bundleRoots() : [""];
-      for (const root of configuredRoots) {
+      // per bundle root - `""` when the whole vault is the bundle; never for a
+      // vault with no bundle, which scanVault already turned away.
+      for (const root of this.bundleRoots()) {
         const rootIndexPath = this.rootIndexPathFor(root);
         // The live index decides: a root Obsidian actually lists is scanned
         // wherever it sits. Only an absent one is explained - by the dot-folder
@@ -1451,9 +1485,13 @@ export default class LokfPlugin extends Plugin {
       // nothing happened; both callers already require a .md file, so the
       // only two reasons left are exclusion and being outside every bundle.
       if (notify) {
+        if (this.hasNoBundle()) {
+          this.noBundleNotice();
+          return;
+        }
         const reason = isExcluded(file.path, this.settings)
           ? "it is in an excluded folder"
-          : "it is outside every configured bundle root";
+          : "it is outside every bundle root";
         new Notice(`LOKF: not validated - ${reason}.`);
       }
       return;
@@ -1477,6 +1515,14 @@ export default class LokfPlugin extends Plugin {
 
   private refreshStatus(): void {
     if (!this.hasVerdict) {
+      if (this.hasNoBundle()) {
+        this.statusEl.setText("LOKF: no bundle");
+        this.statusEl.setAttribute(
+          "aria-label",
+          "This vault has no knowledge bundle (no knowledge_bundle folder, no LOKF header on the root index.md), so nothing is checked. Insert the bundle's semantic header creates one."
+        );
+        return;
+      }
       this.statusEl.setText("LOKF: —");
       this.statusEl.setAttribute("aria-label", "LOKF - click to validate");
       return;
@@ -1522,6 +1568,11 @@ export default class LokfPlugin extends Plugin {
    *  whole-vault root when none are configured. Null only when several roots
    *  are configured and no open note picks one out - there is no default to
    *  fall back to that wouldn't silently scaffold the wrong bundle. */
+  /** Which bundle the scaffold command works on: the active note's, else the
+   *  only one there is. A vault with no bundle gets one created - as the
+   *  visible `knowledge_bundle/` folder beside the notes, never by turning the
+   *  vault root into one: the vault is the workshop, the bundle the exhibition,
+   *  and the other notes were never LOKF concepts to begin with. */
   private resolveScaffoldTarget(): string | null {
     const active = this.app.workspace.getActiveFile();
     if (active) {
@@ -1529,7 +1580,7 @@ export default class LokfPlugin extends Plugin {
       if (r !== null) return r;
     }
     const roots = this.bundleRoots();
-    if (roots.length === 0) return "";
+    if (roots.length === 0) return VISIBLE_BUNDLE_FOLDER;
     if (roots.length === 1) return roots[0] ?? "";
     return null;
   }
@@ -1596,6 +1647,13 @@ publisher:
       return;
     }
     this.invalidateBaseIri(rootIndexPath);
-    new Notice(`LOKF: inserted a semantic header template into ${rootIndexPath} - replace the placeholder base_iri before publishing.`);
+    const created = root === VISIBLE_BUNDLE_FOLDER && !this.settings.bundleRoots.length && !this.settings.treatVaultRootAsBundle;
+    new Notice(
+      created
+        ? `LOKF: created the ${root} folder with a semantic header in its index.md - this vault's bundle from now on; the notes around it are left alone. Replace the placeholder base_iri before publishing.`
+        : `LOKF: inserted a semantic header template into ${rootIndexPath} - replace the placeholder base_iri before publishing.`,
+      created ? 10000 : 5000
+    );
+    this.refreshStatus();
   }
 }
