@@ -1,5 +1,22 @@
 # Change Log
 
+## 2026-09-12 (4)
+
+* **Semantic-release, hardened** (maintainer decision): `playbooks/releasing.md`
+  rewritten (`generated`/`verified` refreshed) - a person no longer picks the
+  version. `semantic-release.yml`'s `release` job, behind the `release`
+  GitHub Environment, computes it from Conventional Commits and runs a new
+  `.github/scripts/changelog-release.mjs` as semantic-release's own
+  `verifyRelease`/`generateNotes`/`prepare` hooks: refuses an empty
+  `## [Unreleased]`, uses it as the release notes, retitles it to a dated
+  heading. `@semantic-release/npm` (`npmPublish: false`) still triggers the
+  existing `version` script, so `manifest.json`/`versions.json` update
+  exactly as before. `release.yml` gained a `workflow_call` trigger so the
+  resulting tag reaches it without relying on a bot-pushed tag re-triggering
+  its own `push:` event; unchanged otherwise, including for a hand-pushed
+  tag. semantic-release is installed at pinned versions inside the workflow,
+  never added to `package.json`.
+
 ## 2026-09-12 (3)
 
 * **Renamed** (maintainer decision): the plugin is **LOKF Registrar**, id

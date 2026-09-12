@@ -6,6 +6,10 @@ No version below has been published as a GitHub release yet, so entries describe
 
 ## [Unreleased]
 
+### Added
+
+- **Semantic-release, hardened.** [`semantic-release.yml`](.github/workflows/semantic-release.yml) computes the next version from Conventional Commits on `main` and promotes this file's own `## [Unreleased]` section into a dated heading, via a new, dependency-free `.github/scripts/changelog-release.mjs` run as the tool's own `verifyRelease`/`generateNotes`/`prepare` hooks - refusing to release anything left undocumented. `manifest.json`/`package.json`/`versions.json` bump exactly as `npm version` already did by hand. `release.yml` gains a `workflow_call` trigger so the resulting tag reaches it without relying on a `GITHUB_TOKEN`-pushed tag re-triggering its own `push:` event (GitHub suppresses that); a hand-pushed tag still goes through the same, unchanged path. semantic-release itself is installed at exact pinned versions in the workflow, never added to `package.json`, so the release tool's dependency tree stays out of every `npm ci` in `build.yml`. The write-scoped job sits behind the `release` GitHub Environment - configure required reviewers on it in this repository's Settings → Environments. See `CONTRIBUTING.md`'s "Releasing" section for the maintainer-facing flow.
+
 ## [0.5.0] - 2026-09-12
 
 ### Added

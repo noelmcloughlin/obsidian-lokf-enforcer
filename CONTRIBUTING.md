@@ -77,20 +77,17 @@ Open an issue with your Obsidian version, OS, plugin version, and steps to repro
 
 ## Releasing (maintainers)
 
-Releases go through a PR like any other change, so the version bump is reviewable and the tag lands on `main`:
+The version number is no longer hand-picked. Write `## [Unreleased]` in `CHANGELOG.md` as you go - the same section you already keep current for each change - and describe what changed with a [Conventional Commits](https://www.conventionalcommits.org/) type (`feat:`, `fix:`, `security:` for a patch, `BREAKING CHANGE:` in a footer, or `!` after the type, for a major). Open the PR as normal.
 
-```bash
-git switch -c release/0.2.0 origin/main
-npm version minor --no-git-tag-version   # updates package.json + manifest.json + versions.json
-```
+Once it merges to `main`, [`semantic-release.yml`](.github/workflows/semantic-release.yml) does the rest:
 
-`.npmrc` sets `tag-version-prefix=""`, so a tag created by `npm version` is a bare `0.2.0` with no leading `v` - which is what Obsidian requires.
+1. Computes the next version from the commits since the last release. Nothing lands if none of them warrant one.
+2. Refuses to proceed if `## [Unreleased]` is empty (`.github/scripts/changelog-release.mjs check`) - this pipeline releases only what's already been written up, never a bare version bump.
+3. Retitles that section to `## [X.Y.Z] - YYYY-MM-DD` and inserts a fresh empty `## [Unreleased]` above it, and bumps `package.json` (which triggers the existing `version` script - `manifest.json` and `versions.json` update exactly as they did under `npm version`, `.npmrc`'s `tag-version-prefix=""` included).
+4. Commits those files and creates the bare `X.Y.Z` tag Obsidian requires.
 
-Then date the `## [Unreleased]` heading in `CHANGELOG.md`, open the PR, and once it's merged, tag the merge commit:
+That tag then invokes `release.yml` directly (unchanged), which builds, attests provenance, and opens the release as a **draft** carrying `main.js`, `manifest.json`, and `styles.css` - review the draft and publish it by hand, same as before.
 
-```bash
-git switch main && git pull
-git tag 0.2.0 && git push origin 0.2.0
-```
+Step 3 onward runs behind the `release` GitHub Environment - **configure required reviewers on it once, in this repository's Settings → Environments**, or every qualifying merge ships unattended. `semantic-release.yml`'s own header comment has the full design and why each piece is shaped the way it is.
 
-Pushing the tag triggers the release workflow, which builds, attests provenance, and opens the release as a **draft** carrying `main.js`, `manifest.json`, and `styles.css`. Review the draft and publish it by hand - that is also when the release notes get written.
+A hand-pushed tag (`git tag 0.2.0 && git push origin 0.2.0`) still works exactly as before, going through the same `release.yml` - useful for a hotfix or recovering from an automation problem, not the normal path.
