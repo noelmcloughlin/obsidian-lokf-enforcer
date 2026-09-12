@@ -9,6 +9,9 @@ dependsOn:
 generated:
   by: process:lokf-librarian
   at: "2026-09-11T12:00:00Z"
+verified:
+  - by: process:lokf-librarian
+    at: "2026-09-12T21:00:00Z"
 status: draft
 ---
 

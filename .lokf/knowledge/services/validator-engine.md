@@ -12,10 +12,10 @@ relatedTo:
   - https://lokf-registrar.example/knowledge/references/lokf-toolkit
 generated:
   by: process:lokf-librarian
-  at: "2026-09-11T12:00:00Z"
+  at: "2026-09-12T21:00:00Z"
 verified:
   - by: process:lokf-librarian
-    at: "2026-09-11T12:00:00Z"
+    at: "2026-09-12T21:00:00Z"
 ---
 
 # Overview
@@ -58,6 +58,15 @@ normalizer - a folder written with a trailing slash used to exclude nothing
 at all. The `base_iri` authority-denylist check compares the URL's
 `hostname`, not `host`, so a denylisted domain on a non-default port
 (`https://github.com:8080/...`) can no longer slip past it.
+
+`implicitBundleRoots(rootHasHeader, hasVisibleBundleFolder, treatVaultRootAsBundle)`
+(the function `services/lokf-registrar-plugin.md` calls `autoBundleRoot`
+under its pre-2026-09-12 name) is the pure decision behind bundle-root
+detection: header wins over folder, folder wins over the break-glass
+setting, and with all three false it returns an **empty array** - a vault
+with no bundle at all - rather than the old whole-vault fallback
+(`resolveBundleRoot` then resolves every path to `null`, not `""`, for such
+a vault).
 
 An independent TypeScript reimplementation of the spec, not a wrapper around
 the [LOKF toolkit](../references/lokf-toolkit.md) - this file has no runtime

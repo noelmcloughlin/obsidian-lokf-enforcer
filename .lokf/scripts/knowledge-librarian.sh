@@ -92,6 +92,12 @@ EOF
 # there is no eval and no `bash -c`. This step runs only in the workflow's
 # read-only `refresh` job (contents: read, no persisted credentials), and the
 # post-run check further fails if the agent wrote outside .lokf/knowledge/.
+# That check, and the AGENT_CLI invocation itself, live inside main() below,
+# called only from this file's last line: bash reads a function body in full
+# before running any of it, so - unlike the top-level statements this used to
+# be - nothing after the agent call can be skipped by an agent that truncates
+# this script mid-run (bash otherwise just stops at whatever the file's
+# current length on disk is when it gets there).
 #
 # Split AGENT_CLI into an argv array (whitespace word-split, no globbing) and
 # invoke it as a quoted vector rather than a re-expanded string. Handles the
@@ -115,14 +121,44 @@ outside_bundle() {
     ':(exclude).lokf/knowledge' ':(exclude)knowledge_bundle' ':(exclude).lokf/feedback.md' \
     | cut -c4- | sort -u
 }
-before_outside="$(outside_bundle)"
 
-echo "knowledge-librarian: refreshing the .lokf/ bundle via AGENT_CLI"
-"${agent_cmd[@]}" -p "$prompt"
+main() {
+  # A local, well-formed AGENT_CLI can still run code that writes anywhere in
+  # this job's checkout - that's what the check above is for. But that check
+  # is only as good as the `git status` it reads: an agent that sets
+  # core.fsmonitor or core.hooksPath in .git/config, or drops a file in
+  # .git/hooks/, gets it run by *this script's own* later git commands (and
+  # by the workflow's separate detect/package steps after this script exits,
+  # which share this job's checkout). Snapshot both around the agent call and
+  # restore them unconditionally, so neither this check nor anything the
+  # workflow does afterwards can be blinded or hijacked that way. This is
+  # defence in depth, not the actual backstop - a human reviewing the PR
+  # before merge is.
+  local config_snapshot hooks_snapshot
+  config_snapshot="$(mktemp)"
+  hooks_snapshot="$(mktemp -d)"
+  cp .git/config "$config_snapshot"
+  cp -a .git/hooks/. "$hooks_snapshot/"
 
-stray="$(comm -13 <(printf '%s\n' "$before_outside") <(outside_bundle))"
-if [ -n "${stray//[$'\n\t ']/}" ]; then
-  echo "knowledge-librarian: agent modified paths outside .lokf/knowledge/ - refusing:" >&2
-  printf '%s\n' "$stray" | sed '/^$/d; s/^/  /' >&2
-  exit 3
-fi
+  local before_outside
+  before_outside="$(outside_bundle)"
+
+  echo "knowledge-librarian: refreshing the .lokf/ bundle via AGENT_CLI"
+  "${agent_cmd[@]}" -p "$prompt"
+
+  cp "$config_snapshot" .git/config
+  rm -rf .git/hooks
+  mkdir .git/hooks
+  cp -a "$hooks_snapshot/." .git/hooks/
+  rm -rf "$config_snapshot" "$hooks_snapshot"
+
+  local stray
+  stray="$(comm -13 <(printf '%s\n' "$before_outside") <(outside_bundle))"
+  if [ -n "${stray//[$'\n\t ']/}" ]; then
+    echo "knowledge-librarian: agent modified paths outside .lokf/knowledge/ - refusing:" >&2
+    printf '%s\n' "$stray" | sed '/^$/d; s/^/  /' >&2
+    exit 3
+  fi
+}
+
+main "$@"

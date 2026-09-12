@@ -1,5 +1,43 @@
 # Change Log
 
+## 2026-09-12 (5)
+
+* **Steady-state refresh** (librarian pass, no feedback pending): corrected
+  drift against this session's "no bundle" state and break-glass
+  `treatVaultRootAsBundle` setting (`src/main.ts`, `src/validator.ts`,
+  `src/settings.ts`) - `services/lokf-registrar-plugin.md` and
+  `services/validator-engine.md` described the old always-a-whole-vault
+  fallback and the renamed `autoBundleRoot`/`implicitBundleRoots` function
+  under its previous name; `services/settings-tab.md` had no mention of the
+  break-glass toggle at all. `references/commands-and-settings.md`'s command
+  table was corrected wholesale against `src/main.ts`: it named 12 ids that
+  do not exist in the source (`find-orphan`, `lookup-field`, `goto-finding`,
+  `fix-safe-active`/`fix-safe-vault`, `promote-links`,
+  `affordances-active`/`affordances-vault`/`diataxis-map`) in place of the 15
+  the plugin actually registers - a pre-existing drift this session's changes
+  only made more visible, not one this session caused.
+* **Corrected** `playbooks/scheduled-librarian.md` against this session's
+  security hardening of the scheduled-agent workflow: a third, independent
+  write-scope re-derivation in the `publish` job (on a checkout that never
+  shared a workspace with the agent), a guard refusing any patch that adds a
+  `by: human:` claim, and the wrapper script's `.git/config`/`.git/hooks`
+  snapshot-and-restore around the agent call - all newly documented in
+  `SECURITY.md` this session.
+* **Extended** `playbooks/knowledge-sources.md` with a row for the new
+  `docs/for-the-curious.md` (the former README "For the curious" section,
+  moved out this session) and an orphan-sweep note for `src/`'s
+  implementation-detail files and a handful of repo-plumbing files, both
+  consciously left without their own concepts. Added `docs/for-the-curious.md`
+  to `explanation/why-lokf-registrar.md`'s `sources`, alongside `README.md`.
+* **Re-verified** (no drift): `playbooks/contributing.md`,
+  `policies/no-telemetry.md`, `playbooks/quality-gates.md`. `playbooks/releasing.md`
+  was already current from earlier the same day. PyPI's `lokf` is still at
+  `0.7.0` (checked via the PyPI JSON API; `uv pip index versions` is not a
+  subcommand of this environment's `uv 0.12.11`) - no `pyproject.toml` floor
+  bump needed. This repository's git `origin` remote still points at the
+  pre-rename `obsidian-lokf-enforcer` URL, but no concept's `resource` field
+  hardcodes it, so no concept-level fix was needed.
+
 ## 2026-09-12 (4)
 
 * **Semantic-release, hardened** (maintainer decision): `playbooks/releasing.md`

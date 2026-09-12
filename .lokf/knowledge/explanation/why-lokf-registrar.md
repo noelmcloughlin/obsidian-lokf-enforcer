@@ -5,6 +5,9 @@ title: Why LOKF Registrar
 genre: explanation
 description: Why the LOKF semantic layer needs its own in-editor check, why the plugin checks the OKF v0.2 base layer itself instead of leaning on a separate validator, why it names no other plugin but its sibling LOKF Curator, and why it is called the registrar.
 resource: README.md
+sources:
+  - resource: README.md
+  - resource: docs/for-the-curious.md
 about:
   - https://lokf-registrar.example/knowledge/references/okf-specification
   - https://lokf-registrar.example/knowledge/references/lokf-specification
@@ -12,7 +15,7 @@ relatedTo:
   - https://lokf-registrar.example/knowledge/services/lokf-registrar-plugin
 generated:
   by: process:lokf-librarian
-  at: "2026-09-12T17:00:00Z"
+  at: "2026-09-12T21:00:00Z"
 status: draft
 ---
 
@@ -25,6 +28,17 @@ one that has to run *as a person writes*, in the editor, because an Obsidian
 vault has no CI gate to catch a malformed record after the fact. That is the
 registrar's half of the job the `lokf-agent-skills` README names: keeping
 records well-formed, never judging whether they are true.
+
+# Where the detailed reasoning now lives
+
+README.md's own "For the curious" section is now one line pointing at
+[docs/for-the-curious.md](../../../docs/for-the-curious.md), which carries
+most of what this section below used to draw from README directly - the
+checks-added-over-plain-OKF list, the OKF v0.2 base-layer rationale, what is
+deliberately left unchecked, and the four-tier trust model. This concept's
+"Why the name" and "What it still leaves out" sections still draw on
+README.md itself (Credits, Alternative plugins, and the sibling-plugin
+framing), so both files are recorded as sources.
 
 # Why it checks the OKF v0.2 base layer itself
 

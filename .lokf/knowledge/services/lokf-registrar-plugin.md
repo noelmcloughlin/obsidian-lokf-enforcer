@@ -13,18 +13,21 @@ about:
   - https://lokf-registrar.example/knowledge/references/commands-and-settings
 generated:
   by: process:lokf-librarian
-  at: "2026-09-12T17:00:00Z"
+  at: "2026-09-12T21:00:00Z"
 verified:
   - by: process:lokf-librarian
-    at: "2026-09-12T17:00:00Z"
+    at: "2026-09-12T21:00:00Z"
 ---
 
 # Overview
 
 **LOKF Registrar Plugin** (`src/main.ts`) is the plugin's lifecycle shell: it
-registers three commands (`validate-vault`, `validate-active`,
-`scaffold-root-header`), a clickable status-bar indicator (`LOKF ✓` /
-`LOKF ⚠ N` / `LOKF ✖ N`), and the collapsible side-panel report view.
+registers fifteen commands - `validate-vault`, `validate-active`,
+`scaffold-root-header`, plus find/fix/affordance/navigation commands (see
+[Commands and settings](../references/commands-and-settings.md) for the
+full, current id list) - a clickable status-bar indicator (`LOKF ✓` /
+`LOKF ⚠ N` / `LOKF ✖ N` / `LOKF: no bundle`), and the collapsible side-panel
+report view.
 
 Running **Validate active note** (the command, or a status-bar click) on a
 note excluded by settings or outside every configured bundle root now says
@@ -49,14 +52,30 @@ plugin it names in code is its sibling **LOKF Curator**, as a possible reader
 of the read-only `api` surface (`getReport`, `validatePath`, `onValidated`) -
 offered, never required, with no dependency in either direction.
 
-# Bundle roots and the Diátaxis map (2026-09-12, afternoon pass)
+# Bundle roots, the no-bundle state, and the Diátaxis map (2026-09-12)
 
 With *Bundle root folders* empty, `bundleRoots()` falls back to
-`detectedRoot()`: a top-level `knowledge_bundle/index.md` in a vault whose
-root `index.md` carries no LOKF header makes `knowledge_bundle` the root
-(the pure decision is `validator.ts`'s `autoBundleRoot`). The scan checks
-Obsidian's live index before explaining an absent root, so a dot-folder root a
-plugin such as Hidden Folders Access exposes is scanned like any other.
+`implicitRoots()`, which calls `validator.ts`'s pure `implicitBundleRoots`
+(renamed from the earlier `autoBundleRoot`, whose two-argument shape only
+distinguished "whole vault" from "detected `knowledge_bundle/`"): a root
+`index.md` carrying a LOKF header makes the whole vault the bundle
+(`[""]`); otherwise a top-level `knowledge_bundle/index.md` makes that
+folder the bundle (`[VISIBLE_BUNDLE_FOLDER]`); otherwise, with the
+break-glass *Treat the vault root as the bundle* setting
+(`treatVaultRootAsBundle`, off by default) also off, the function returns an
+**empty list** - *no bundle at all*, not the old whole-vault fallback.
+`hasNoBundle()` is `bundleRoots().length === 0`; in that state nothing is
+scanned or warned about, the status bar reads `LOKF: no bundle`, and every
+command that would otherwise act shows one explanatory `Notice`
+(`noBundleNotice()`) instead. Turning the break-glass setting on reads a
+headerless whole vault as one bundle anyway, but never overrides a detected
+`knowledge_bundle/` folder. **Insert the bundle's semantic header**
+(`scaffold-root-header`) targets whichever bundle the active note belongs
+to; in a vault with no bundle it creates a `knowledge_bundle/` folder and
+writes the header into its `index.md`, rather than decorating the vault
+root. The scan checks Obsidian's live index before explaining an absent
+root, so a dot-folder root a plugin such as Hidden Folders Access exposes is
+scanned like any other.
 `writeDiataxisMap` now writes `diataxis.md` as a `Document` with a minted
 `id` and `generated.by: lokf-registrar/<version>` (`affordances.ts`'s
 `DiataxisHeader`), upgrading a headerless map on its next refresh - `lokf
