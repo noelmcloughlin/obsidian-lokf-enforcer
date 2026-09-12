@@ -1,6 +1,6 @@
 ---
 type: Reference
-id: https://lokf-enforcer.example/knowledge/references/obsidian-plugin-guidelines
+id: https://lokf-registrar.example/knowledge/references/obsidian-plugin-guidelines
 title: Obsidian Plugin Guidelines
 description: Obsidian's official developer guidelines for community plugins - UI conventions, prohibited patterns, and release requirements.
 resource: https://docs.obsidian.md/Plugins/Releasing/Plugin+guidelines

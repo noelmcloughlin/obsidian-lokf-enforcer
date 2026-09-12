@@ -1,6 +1,6 @@
 ---
 type: Policy
-id: https://lokf-enforcer.example/knowledge/policies/code-of-conduct
+id: https://lokf-registrar.example/knowledge/policies/code-of-conduct
 title: Code of Conduct
 description: Contributor Covenant 2.1 - a harassment-free-participation standard, shared verbatim with the sibling lokf-agent-skills repository.
 resource: CODE_OF_CONDUCT.md

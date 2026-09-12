@@ -9,7 +9,14 @@
 import { readFileSync, readdirSync, statSync, existsSync } from "node:fs";
 import { join, relative, sep } from "node:path";
 import { fileURLToPath } from "node:url";
-import { load as loadYaml } from "js-yaml";
+import { createRequire } from "node:module";
+
+// js-yaml is loaded as CommonJS and typed by hand: its @types package ships an
+// ESM typings file that re-exports itself, and under this project's module
+// settings that sends both tsc and type-aware ESLint round in circles (tsc
+// rejects the named import; ESLint never finishes the file).
+const cjs = createRequire(import.meta.url);
+const { load: loadYaml } = cjs("js-yaml") as { load: (source: string) => unknown };
 import {
   validateLokfConcept,
   missingRootIndexIssues,
@@ -31,6 +38,8 @@ import {
   DEFAULT_SETTINGS,
   type LokfIssue,
   type LokfSettings,
+  implicitBundleRoots,
+  VISIBLE_BUNDLE_FOLDER,
 } from "../src/validator";
 import { locateFrontmatterKey, locationToDocRange } from "../src/locator";
 import { pluginDefaultSettings, SCHEMA_VERSION, LOKF_VOCAB } from "../src/vocab";
@@ -39,9 +48,20 @@ import { detectSuggestContext, withinFrontmatter } from "../src/suggest-context"
 import { computeFixes, type FixEdit } from "../src/fixes";
 import { extractBodyLinks, classifyLink, buildProposals, type BodyLink } from "../src/propose";
 import { issueMatchesFilter, topLevelKey } from "../src/report-filter";
-import { buildConceptBlock, applyConceptBlock, buildDiataxisBlock, applyDiataxisBlock, newDiataxisNote } from "../src/affordances";
+import {
+  buildConceptBlock,
+  applyConceptBlock,
+  buildDiataxisBlock,
+  applyDiataxisBlock,
+  newDiataxisNote,
+  diataxisFrontmatter,
+  refreshGeneratedAt,
+  type DiataxisHeader,
+} from "../src/affordances";
 import { FIELD_ORDER, LOKF_FIELD_DOCS, resolveFieldDocs } from "../src/fields";
 import lokfVocab from "../src/lokf-vocab.json";
+
+const TEST_HEADER: DiataxisHeader = { id: "https://acme.example/knowledge/diataxis", generatedBy: "lokf-registrar/0.0.0-test", generatedAt: "2026-09-12T15:00:00Z" };
 let failures = 0;
 
 function expect(name: string, condition: boolean, detail: string): boolean {
@@ -94,23 +114,23 @@ const errors = (issues: LokfIssue[]) => issues.filter((i) => i.severity === "err
 const warnings = (issues: LokfIssue[]) => issues.filter((i) => i.severity === "warning").length;
 const show = (issues: LokfIssue[]) => JSON.stringify(issues, null, 2);
 
-// Fixture 1: the real .lokf/knowledge/index.md header from okf-enforcer, verbatim.
-section("real .lokf/knowledge/index.md header (placeholder base_iri)", () => {
+// Fixture 1: a realistic bundle-root index.md header (placeholder base_iri, Person publisher).
+section("realistic bundle-root index.md header (placeholder base_iri)", () => {
   const content = `---
 lokf_version: "0.2"
 okf_version: "0.2"
-base_iri: https://okf-enforcer.example/knowledge/
+base_iri: https://acme-knowledge.example/knowledge/
 context: https://w3id.org/lokf/context.jsonld
-title: OKF Enforcer Knowledge Bundle
-description: Validate and enforce the Open Knowledge Format (OKF v0.2) across an Obsidian vault.
+title: Acme Knowledge Bundle
+description: A realistic bundle-root header, as a team wiki or a repository sidecar would carry it.
 license: https://creativecommons.org/licenses/by/4.0/
 publisher:
   type: Person
-  id: https://okf-enforcer.example/knowledge/org/martinforreal
-  name: MartinForReal
+  id: https://acme-knowledge.example/knowledge/person/jane-doe
+  name: Jane Doe
 ---
 
-# OKF Enforcer Knowledge Bundle
+# Acme Knowledge Bundle
 `;
   const issues = check("index.md", content, { isRoot: true });
   expect("zero errors", errors(issues) === 0, show(issues));
@@ -121,7 +141,7 @@ publisher:
   );
   expect(
     "readBaseIri reads the base_iri",
-    readBaseIri(parse(content).data) === "https://okf-enforcer.example/knowledge/",
+    readBaseIri(parse(content).data) === "https://acme-knowledge.example/knowledge/",
     String(readBaseIri(parse(content).data))
   );
 });
@@ -179,7 +199,7 @@ section("vault with no root index.md at all", () => {
   );
 });
 
-section("bundle root normalizes, and a dot-folder root is refused", () => {
+section("bundle root normalizes, and a dot-folder root is recognised (accepted, explained if unlisted)", () => {
   for (const raw of ["knowledge", "knowledge/", "/knowledge", "  knowledge  ", "///knowledge///"]) {
     expect(`"${raw}" normalizes to "knowledge"`, normalizeBundleRoot(raw) === "knowledge", normalizeBundleRoot(raw));
   }
@@ -297,9 +317,14 @@ section("normalizeBundleRoots: normalizes, dedupes, sorts longest-first", () => 
 
 section("resolveBundleRoot: which configured bundle a path belongs to", () => {
   expect(
-    "no roots configured: every path is the implicit whole-vault bundle",
-    resolveBundleRoot("anything/at/all.md", []) === "",
+    "no roots at all means no bundle: every path resolves to null, not to the vault root",
+    resolveBundleRoot("anything/at/all.md", []) === null,
     String(resolveBundleRoot("anything/at/all.md", []))
+  );
+  expect(
+    "the explicit whole-vault root (\"\") matches every path",
+    resolveBundleRoot("anything/at/all.md", [""]) === "" && resolveBundleRoot("index.md", [""]) === "",
+    String(resolveBundleRoot("anything/at/all.md", [""]))
   );
 
   const single = normalizeBundleRoots(["knowledge"]);
@@ -571,22 +596,22 @@ section("OKF base layer - reserved index.md / log.md structure (§8/§9)", () =>
 });
 
 section("mintExpectedId / id-consistency", () => {
-  const baseIri = "https://okf-enforcer.example/knowledge/";
+  const baseIri = "https://acme-knowledge.example/knowledge/";
   expect(
-    "matches the real services/okf-enforcer-plugin.md fixture",
-    mintExpectedId("services/okf-enforcer-plugin.md", baseIri) ===
-      "https://okf-enforcer.example/knowledge/services/okf-enforcer-plugin",
-    mintExpectedId("services/okf-enforcer-plugin.md", baseIri)
+    "mints a hyphenated concept path unchanged",
+    mintExpectedId("services/acme-api.md", baseIri) ===
+      "https://acme-knowledge.example/knowledge/services/acme-api",
+    mintExpectedId("services/acme-api.md", baseIri)
   );
   expect(
     "percent-encodes a filename with a space",
-    mintExpectedId("glossary/My Term.md", baseIri) === "https://okf-enforcer.example/knowledge/glossary/My%20Term",
+    mintExpectedId("glossary/My Term.md", baseIri) === "https://acme-knowledge.example/knowledge/glossary/My%20Term",
     mintExpectedId("glossary/My Term.md", baseIri)
   );
 
   const matching = check(
-    "services/okf-enforcer-plugin.md",
-    `---\ntype: Service\nendpoint: x\nhttp_method: GET\ndocumentation: y\nid: ${baseIri}services/okf-enforcer-plugin\n---\n`,
+    "services/acme-api.md",
+    `---\ntype: Service\nendpoint: x\nhttp_method: GET\ndocumentation: y\nid: ${baseIri}services/acme-api\n---\n`,
     { baseIri, exists: () => true }
   );
   expect("no lokf/5-id warning when the id matches", !matching.some((i) => i.rule === "lokf/5-id"), show(matching));
@@ -1112,9 +1137,71 @@ section("affordances - Diátaxis map groups by genre across all four quadrants",
   expect("all four quadrant headings appear", headings.every((h) => block.includes(h)), block);
   expect("an empty quadrant reads 'No concepts yet.'", block.includes("_No concepts yet._"), block);
   expect("a duplicate entry is collapsed", (block.match(/\[\[Learn\]\]/g) ?? []).length === 1, block);
-  const note = newDiataxisNote(entries);
-  expect("a fresh note carries a human title above the block", note.startsWith("# Diátaxis map"), note);
+  const note = newDiataxisNote(entries, TEST_HEADER);
+  expect("a fresh note carries a human title above the block", note.includes("\n---\n# Diátaxis map\n"), note);
   expect("re-generating the same map is a no-op", applyDiataxisBlock(note, entries) === null, "expected no change");
+});
+
+
+section("implicit bundle roots: the vault says what it is; a workshop with no exhibition is left alone", () => {
+  const j = (x: unknown) => JSON.stringify(x);
+  expect("a root index.md carrying a header makes the whole vault the bundle", j(implicitBundleRoots(true, false, false)) === j([""]), j(implicitBundleRoots(true, false, false)));
+  expect("…and wins over a knowledge_bundle/ folder inside it", j(implicitBundleRoots(true, true, false)) === j([""]), j(implicitBundleRoots(true, true, false)));
+  expect("knowledge_bundle/index.md in a plain notes vault becomes the root", j(implicitBundleRoots(false, true, false)) === j([VISIBLE_BUNDLE_FOLDER]), j(implicitBundleRoots(false, true, false)));
+  expect("neither header nor folder: no bundle, nothing scanned", j(implicitBundleRoots(false, false, false)) === j([]), j(implicitBundleRoots(false, false, false)));
+  expect("break-glass: the same vault read as one whole-vault bundle", j(implicitBundleRoots(false, false, true)) === j([""]), j(implicitBundleRoots(false, false, true)));
+  expect("break-glass does not override a detected knowledge_bundle/", j(implicitBundleRoots(false, true, true)) === j([VISIBLE_BUNDLE_FOLDER]), j(implicitBundleRoots(false, true, true)));
+  expect("the convention's name is the one lokf-sidecar lays down", VISIBLE_BUNDLE_FOLDER === "knowledge_bundle", VISIBLE_BUNDLE_FOLDER);
+});
+
+section("Diátaxis map is a record the registrar accepts: Document header, minted id, plugin provenance", () => {
+  const entries = [{ genre: "how-to", linktext: "services/example-service-a" }];
+  const fresh = newDiataxisNote(entries, TEST_HEADER);
+  expect("starts with frontmatter", fresh.startsWith("---\ntype: Document\n"), fresh.slice(0, 40));
+  expect("carries the minted id", fresh.includes("\nid: https://acme.example/knowledge/diataxis\n"), fresh);
+  expect("carries genre: reference", fresh.includes("\ngenre: reference\n"), fresh);
+  expect("generated.by is the plugin as an OKF §7 producer actor", fresh.includes("\ngenerated:\n  by: lokf-registrar/0.0.0-test\n  at: \"2026-09-12T15:00:00Z\"\n---\n"), fresh);
+  expect("title heading follows the frontmatter", fresh.includes("---\n# Diátaxis map\n\n<!-- lokf:diataxis -->"), fresh);
+  const fm = parse(fresh).data;
+  expect("the frontmatter parses back with type Document", fm["type"] === "Document" && typeof fm["generated"] === "object", JSON.stringify(fm));
+  expect("without a base_iri the id line is simply omitted", !newDiataxisNote(entries, { ...TEST_HEADER, id: null }).includes("\nid:"), "id line present");
+  expect("frontmatter alone ends with the closing fence", diataxisFrontmatter(TEST_HEADER).endsWith("---\n"), diataxisFrontmatter(TEST_HEADER).slice(-10));
+
+  // An older, headerless map gains the header on its next refresh - even when
+  // the block itself is already current.
+  const legacy = `# Diátaxis map\n\n${buildDiataxisBlock(entries)}\n`;
+  const upgraded = applyDiataxisBlock(legacy, entries, TEST_HEADER);
+  expect("a headerless map gains the header", upgraded !== null && upgraded.startsWith("---\ntype: Document\n") && upgraded.includes("# Diátaxis map"), String(upgraded).slice(0, 80));
+  expect("a second pass is a no-op", applyDiataxisBlock(upgraded!, entries, TEST_HEADER) === null, "expected null");
+
+  // A changed block refreshes the plugin-written stamp; a human-written one is left alone.
+  const later = { ...TEST_HEADER, generatedAt: "2026-10-01T09:00:00Z" };
+  const changed = applyDiataxisBlock(fresh, [...entries, { genre: "reference", linktext: "glossary/term" }], later);
+  expect("a changed block refreshes generated.at", changed !== null && changed.includes('at: "2026-10-01T09:00:00Z"') && !changed.includes("2026-09-12T15:00:00Z"), String(changed));
+  const human = fresh.replace("by: lokf-registrar/0.0.0-test", "by: human:ada");
+  const humanChanged = applyDiataxisBlock(human, [...entries, { genre: "reference", linktext: "glossary/term" }], later);
+  expect("a human-authored generated block keeps its stamp", humanChanged !== null && humanChanged.includes('at: "2026-09-12T15:00:00Z"'), String(humanChanged));
+  expect("refreshGeneratedAt is null when nothing matches", refreshGeneratedAt("# no frontmatter\n", "2026-01-01T00:00:00Z") === null, "expected null");
+  expect("an unchanged block leaves the stamp alone", applyDiataxisBlock(fresh, entries, later) === null, "expected null");
+
+  // The stamp refresh copes with how a frontmatter block may actually be written,
+  // and touches nothing but the plugin's own stamp inside the frontmatter.
+  const more = [...entries, { genre: "reference", linktext: "glossary/term" }];
+  const crlf = fresh.replace(/\n/g, "\r\n");
+  const crlfChanged = applyDiataxisBlock(crlf, more, later);
+  expect("a CRLF map still refreshes its stamp", crlfChanged !== null && crlfChanged.includes('at: "2026-10-01T09:00:00Z"'), String(crlfChanged).slice(0, 220));
+  const unquoted = fresh.replace('at: "2026-09-12T15:00:00Z"', "at: 2026-09-12T15:00:00Z");
+  const requoted = refreshGeneratedAt(unquoted, "2026-10-01T09:00:00Z");
+  expect("an unquoted stamp is refreshed, and quoted", requoted !== null && requoted.includes('  at: "2026-10-01T09:00:00Z"\n---'), String(requoted));
+  const otherProcess = fresh.replace("by: lokf-registrar/0.0.0-test", "by: process:lokf-librarian");
+  expect("another process's generated block is never re-stamped", refreshGeneratedAt(otherProcess, "2026-10-01T09:00:00Z") === null, "expected null");
+  const formerName = fresh.replace("by: lokf-registrar/0.0.0-test", "by: lokf-enforcer/0.4.0");
+  const formerRestamped = refreshGeneratedAt(formerName, "2026-10-01T09:00:00Z");
+  expect("a map stamped under the plugin's former name (lokf-enforcer) is still its own and is re-stamped", formerRestamped !== null && formerRestamped.includes('by: lokf-enforcer/0.4.0\n  at: "2026-10-01T09:00:00Z"'), String(formerRestamped));
+  const bodyCopy = `${fresh}\ngenerated:\n  by: lokf-registrar/0.0.0-test\n  at: "2020-01-01T00:00:00Z"\n`;
+  const bodyKept = refreshGeneratedAt(bodyCopy, "2026-10-01T09:00:00Z");
+  expect("a generated mapping in the body is left alone; only the frontmatter stamp moves", bodyKept !== null && bodyKept.includes('at: "2020-01-01T00:00:00Z"') && bodyKept.includes('at: "2026-10-01T09:00:00Z"'), String(bodyKept));
+  expect("a fenceless document is not frontmatter", refreshGeneratedAt("type: Document\ngenerated:\n  by: lokf-registrar/1\n  at: x\n", "2026-10-01T09:00:00Z") === null, "expected null");
 });
 
 section("field reference - covers the header fields and frames base_iri as an identifier", () => {
@@ -1151,12 +1238,12 @@ section("field reference - covers the header fields and frames base_iri as an id
   const longest = Math.max(...LOKF_FIELD_DOCS.map((f) => f.description.length));
   expect("every field description stays modal-sized (<= 400 chars)", longest <= 400, `longest description is ${longest} chars`);
 });
-// (a) the lokf-scaffolding skeleton, with its <PLACEHOLDER> tokens filled in as
-// a real project would. scripts/fixtures/scaffolding-skeleton is a frozen copy
-// of lokf-agent-skills' skills/lokf-scaffolding/templates/knowledge - a golden
+// (a) the lokf-sidecar skeleton, with its <PLACEHOLDER> tokens filled in as
+// a real project would. scripts/fixtures/sidecar-skeleton is a frozen copy
+// of lokf-agent-skills' skills/lokf-sidecar/templates/knowledge - a golden
 // fixture, refreshed deliberately from a tagged release, never read live from
 // an installed (and git-ignored) skill.
-validateBundle("lokf-scaffolding template skeleton", join(repoRoot, "scripts", "fixtures", "scaffolding-skeleton"), {
+validateBundle("lokf-sidecar template skeleton", join(repoRoot, "scripts", "fixtures", "sidecar-skeleton"), {
   required: true,
   transform: (c) =>
     c
@@ -1170,7 +1257,7 @@ validateBundle("lokf-scaffolding template skeleton", join(repoRoot, "scripts", "
 });
 
 // (b) this repo's own bundle.
-validateBundle("lokf-enforcer's own .lokf/knowledge", join(repoRoot, ".lokf", "knowledge"), { required: true });
+validateBundle("lokf-registrar's own .lokf/knowledge", join(repoRoot, ".lokf", "knowledge"), { required: true });
 
 // (c) any other real bundle, opt-in so this suite stays hermetic - its result
 // must not depend on what happens to sit next to the checkout. Point it at a

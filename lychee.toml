@@ -4,5 +4,5 @@ exclude = [
   '^https://w3id\.org/lokf/context\.jsonld$',
   # This repo's own placeholder base_iri (RFC 2606 reserved domain) - see
   # FIXES.md F5. Drop once a real namespace is registered.
-  '^https://lokf-enforcer\.example/',
+  '^https://lokf-registrar\.example/',
 ]

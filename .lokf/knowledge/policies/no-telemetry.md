@@ -1,15 +1,15 @@
 ---
 type: Policy
-id: https://lokf-enforcer.example/knowledge/policies/no-telemetry
+id: https://lokf-registrar.example/knowledge/policies/no-telemetry
 title: No Telemetry
-description: LOKF Enforcer makes no network requests and has no telemetry, analytics, or external services.
+description: LOKF Registrar makes no network requests and has no telemetry, analytics, or external services.
 resource: README.md
 generated:
   by: process:lokf-librarian
   at: "2026-09-08T00:00:00Z"
 verified:
   - by: process:lokf-librarian
-    at: "2026-09-11T00:00:00Z"
+    at: "2026-09-12T21:00:00Z"
 ---
 
 # Overview

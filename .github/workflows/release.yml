@@ -4,6 +4,18 @@ on:
     push:
         tags:
             - '*'
+    # Invoked directly by semantic-release.yml's `build-and-attest` job right
+    # after it pushes a new version tag, since a tag pushed with the default
+    # GITHUB_TOKEN does not itself re-trigger the `push: tags:` event above
+    # (GitHub's own loop prevention) — workflow_call sidesteps that, and a
+    # hand-pushed tag still goes through the trigger above unchanged, so
+    # either path builds, attests, and opens the same draft release.
+    workflow_call:
+        inputs:
+            tag:
+                description: 'Version tag to build and release (bare, no leading v)'
+                required: true
+                type: string
 
 # Least-privilege default: every scope starts read-only (or none). The build
 # job below opts back into exactly the three write scopes it needs; no other
@@ -34,6 +46,7 @@ jobs:
             - name: Check out the tagged commit
               uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
               with:
+                  ref: ${{ inputs.tag || github.ref_name }}
                   persist-credentials: false
 
             # Obsidian matches a release to a plugin version by tag name, exact
@@ -47,7 +60,7 @@ jobs:
             # a run: block would let a pushed tag execute here.
             - name: Verify tag matches manifest version
               env:
-                  TAG: ${{ github.ref_name }}
+                  TAG: ${{ inputs.tag || github.ref_name }}
               run: |
                   version="$(node -p "require('./manifest.json').version")"
                   if [ "$TAG" != "$version" ]; then
@@ -81,7 +94,7 @@ jobs:
             - name: Create release
               env:
                   GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-                  TAG: ${{ github.ref_name }}
+                  TAG: ${{ inputs.tag || github.ref_name }}
               run: |
                     gh release create "$TAG" \
                         --title="$TAG" \

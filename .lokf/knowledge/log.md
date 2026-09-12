@@ -1,5 +1,117 @@
 # Change Log
 
+## 2026-09-12 (5)
+
+* **Steady-state refresh** (librarian pass, no feedback pending): corrected
+  drift against this session's "no bundle" state and break-glass
+  `treatVaultRootAsBundle` setting (`src/main.ts`, `src/validator.ts`,
+  `src/settings.ts`) - `services/lokf-registrar-plugin.md` and
+  `services/validator-engine.md` described the old always-a-whole-vault
+  fallback and the renamed `autoBundleRoot`/`implicitBundleRoots` function
+  under its previous name; `services/settings-tab.md` had no mention of the
+  break-glass toggle at all. `references/commands-and-settings.md`'s command
+  table was corrected wholesale against `src/main.ts`: it named 12 ids that
+  do not exist in the source (`find-orphan`, `lookup-field`, `goto-finding`,
+  `fix-safe-active`/`fix-safe-vault`, `promote-links`,
+  `affordances-active`/`affordances-vault`/`diataxis-map`) in place of the 15
+  the plugin actually registers - a pre-existing drift this session's changes
+  only made more visible, not one this session caused.
+* **Corrected** `playbooks/scheduled-librarian.md` against this session's
+  security hardening of the scheduled-agent workflow: a third, independent
+  write-scope re-derivation in the `publish` job (on a checkout that never
+  shared a workspace with the agent), a guard refusing any patch that adds a
+  `by: human:` claim, and the wrapper script's `.git/config`/`.git/hooks`
+  snapshot-and-restore around the agent call - all newly documented in
+  `SECURITY.md` this session.
+* **Extended** `playbooks/knowledge-sources.md` with a row for the new
+  `docs/for-the-curious.md` (the former README "For the curious" section,
+  moved out this session) and an orphan-sweep note for `src/`'s
+  implementation-detail files and a handful of repo-plumbing files, both
+  consciously left without their own concepts. Added `docs/for-the-curious.md`
+  to `explanation/why-lokf-registrar.md`'s `sources`, alongside `README.md`.
+* **Re-verified** (no drift): `playbooks/contributing.md`,
+  `policies/no-telemetry.md`, `playbooks/quality-gates.md`. `playbooks/releasing.md`
+  was already current from earlier the same day. PyPI's `lokf` is still at
+  `0.7.0` (checked via the PyPI JSON API; `uv pip index versions` is not a
+  subcommand of this environment's `uv 0.12.11`) - no `pyproject.toml` floor
+  bump needed. This repository's git `origin` remote still points at the
+  pre-rename `obsidian-lokf-enforcer` URL, but no concept's `resource` field
+  hardcodes it, so no concept-level fix was needed.
+
+## 2026-09-12 (4)
+
+* **Semantic-release, hardened** (maintainer decision): `playbooks/releasing.md`
+  rewritten (`generated`/`verified` refreshed) - a person no longer picks the
+  version. `semantic-release.yml`'s `release` job, behind the `release`
+  GitHub Environment, computes it from Conventional Commits and runs a new
+  `.github/scripts/changelog-release.mjs` as semantic-release's own
+  `verifyRelease`/`generateNotes`/`prepare` hooks: refuses an empty
+  `## [Unreleased]`, uses it as the release notes, retitles it to a dated
+  heading. `@semantic-release/npm` (`npmPublish: false`) still triggers the
+  existing `version` script, so `manifest.json`/`versions.json` update
+  exactly as before. `release.yml` gained a `workflow_call` trigger so the
+  resulting tag reaches it without relying on a bot-pushed tag re-triggering
+  its own `push:` event; unchanged otherwise, including for a hand-pushed
+  tag. semantic-release is installed at pinned versions inside the workflow,
+  never added to `package.json`.
+
+## 2026-09-12 (3)
+
+* **Renamed** (maintainer decision): the plugin is **LOKF Registrar**, id
+  `lokf-registrar`, repository `obsidian-lokf-registrar` - the name now says
+  the role this bundle already gave it. Bundle-wide: the placeholder
+  namespace is `https://lokf-registrar.example/knowledge/` and every `id`
+  and relation target is re-minted under it; `services/lokf-enforcer-plugin.md`
+  moved to `services/lokf-registrar-plugin.md` and
+  `explanation/why-lokf-enforcer.md` to `explanation/why-lokf-registrar.md`,
+  ids and titles with them; `index.md` retitled. `why-lokf-registrar.md`
+  gains a "Why the name" section and `lokf-registrar-plugin.md` an
+  "Identity" section (API path, device key, `generated.by` actor, and that
+  a map stamped `lokf-enforcer/<version>` by an earlier build is still
+  recognised as the plugin's own); both `generated` refreshed. `NOTICE` no
+  longer calls the plugin a companion to a separate OKF validator - it
+  checks the base layer itself. `references/okf-specification.md` corrected
+  in passing: the plugin has checked required `type` and Attested Computation
+  shape itself since 0.4.0, which that concept still denied. Entries below keep
+  the names in use at the time.
+
+## 2026-09-12 (2)
+
+* **Corrected** `services/lokf-enforcer-plugin.md`, `services/settings-tab.md`,
+  `references/commands-and-settings.md` after the maintainer had the
+  afternoon's feature-fit audit implemented: `diataxis.md` is now written as a
+  `Document` with a minted `id` and `generated.by: lokf-enforcer/<version>`
+  (the earlier headerless map made `lokf validate` abort a run); with no
+  bundle roots configured a top-level `knowledge_bundle/` is detected on its
+  own (`autoBundleRoot`); a dot-folder root is accepted with a live-index
+  check and a warning instead of being refused. The `## Open questions`
+  section on the plugin concept is replaced by the record of what changed.
+
+* **Corrected** `services/lokf-enforcer-plugin.md`, `services/settings-tab.md`,
+  `references/commands-and-settings.md`, and rewrote
+  `explanation/why-lokf-enforcer.md`: the plugin no longer detects,
+  recommends, or deep-links to any other OKF validator. The commented-out
+  `detectOkfValidator`, the one-time notice (`recommendOkfValidator` /
+  `okfValidatorNoticeShown`), and the "Alternative OKF validator" settings
+  group were removed from `src/main.ts`, `src/settings.ts`, and
+  `src/validator.ts` at the maintainer's direction: with the OKF v0.2 base
+  layer checked here, a separate validator is an *alternative* worth a
+  footnote, not a companion, and the only plugin this one names is its
+  sibling LOKF Curator. `README.md` was restructured the same day around how
+  an Obsidian user actually meets a bundle (the bundle is the vault; a folder
+  in the vault; derived from a repository and opened via `knowledge_bundle`)
+  and now states, per Obsidian's own help on symbolic links, that a
+  repository root opened as a vault cannot reach the bundle through the
+  link - the previous README's contrary claim was wrong. The smoke test's
+  first header fixture, formerly a verbatim copy of another project's
+  `index.md`, is now a neutral example; the frozen template fixture moved
+  from `scripts/fixtures/scaffolding-skeleton/` to
+  `scripts/fixtures/sidecar-skeleton/` to follow the upstream skill's rename
+  from `lokf-scaffolding` to `lokf-sidecar`. Command table in
+  `references/commands-and-settings.md` extended to the commands the README
+  documents. Not a full steady-state sweep - concepts untouched by these
+  changes were not re-checked.
+
 ## 2026-09-11 (2)
 
 * **Corrected** `services/validator-engine.md`, `services/lokf-enforcer-plugin.md`,

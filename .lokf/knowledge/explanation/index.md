@@ -1,3 +1,3 @@
 # Explanation
 
-* [Why LOKF Enforcer](why-lokf-enforcer.md)
+* [Why LOKF Registrar](why-lokf-registrar.md)

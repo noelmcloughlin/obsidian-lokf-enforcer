@@ -4,6 +4,41 @@ All notable changes to this project are documented here. The format is based on 
 
 No version below has been published as a GitHub release yet, so entries describe development history against `main`, not user-facing upgrades. No tags exist yet either, which is why version headings carry no compare links.
 
+## [Unreleased]
+
+### Changed
+
+- **A vault with no bundle is left alone.** With nothing configured, a root `index.md` carrying a LOKF header makes the whole vault the bundle and a top-level `knowledge_bundle/` makes that the bundle, as before; a vault with neither now has *no bundle* - nothing scanned, no root-header warning, status bar *LOKF: no bundle*, commands explain instead of acting - rather than being read as one whole-vault bundle. The workshop is never mistaken for the exhibition.
+- **Insert the bundle's semantic header** (was *Insert semantic header template into root index.md*): in a vault with no bundle it now creates `knowledge_bundle/` and puts the header in its `index.md` instead of decorating the vault root.
+- README trimmed: the *For the curious* section is now `docs/for-the-curious.md`.
+
+### Added
+
+- **Treat the vault root as the bundle** (Scope, off by default): the break-glass switch that restores the old whole-vault reading for a vault whose root `index.md` carries no LOKF header.
+
+### Fixed
+
+- `npm run lint` and `tsc` failed on `scripts/smoke-test.ts`'s `js-yaml` import and on `.github/scripts/changelog-release.mjs` (outside ESLint's project); both now pass.
+
+## [0.5.0] - 2026-09-12
+
+### Added
+
+- **Bundle detection for the sidecar convention.** A top-level `knowledge_bundle/` with its own `index.md`, in a vault whose root `index.md` carries no LOKF header, becomes the bundle root with nothing configured. A vault whose root `index.md` is itself a header stays the whole-vault bundle it always was.
+- **The Diátaxis map is a record the registrar accepts.** `diataxis.md` now carries a `type: Document` header with a minted `id` and `generated` provenance naming the plugin; without one, `lokf validate` aborted the whole run. An older headerless map gains a header on its next refresh.
+- **Semantic release.** The version is computed from Conventional Commits on `main`, and `CHANGELOG.md`'s `## [Unreleased]` section is promoted into a dated heading and used as the release notes; `manifest.json`, `package.json` and `versions.json` bump as they always did. The resulting tag runs the same build, attestation and draft release as before, and a hand-pushed tag still does too. See [CONTRIBUTING.md](CONTRIBUTING.md).
+
+### Changed
+
+- **Renamed LOKF Registrar** - id `lokf-registrar`, repository `obsidian-lokf-registrar` - for the role the READMEs already gave it, and to stop shadowing an unrelated community plugin one letter away. Nothing was published under the old name, so there is no migration: settings live in `.obsidian/plugins/lokf-registrar/` and the read-only API at `app.plugins.plugins["lokf-registrar"].api`. A `diataxis.md` map stamped by an earlier build is still recognised as this plugin's own.
+- **A dot-folder bundle root is accepted, not refused** - a community plugin can expose one to Obsidian's index. The scan checks the live index first and explains an absent root instead of assuming.
+- **"How this fits" rewritten** around one desk that is always the person's: this plugin is the registrar there, LOKF Curator the curator's assistant. It covers both ways of reaching a bundle - the doorway opened as its own vault, or a real `knowledge_bundle/` folder inside your own vault - and names the vault the **workshop**, the bundle the **exhibition**.
+- The frozen template fixture is now `scripts/fixtures/sidecar-skeleton/`, matching the upstream skill's rename from `lokf-scaffolding`.
+
+### Removed
+
+- The **Alternative OKF validator** settings group, its community-plugin deep link and its one-time notice, now that the OKF v0.2 base layer is checked here directly. A saved `recommendOkfValidator` / `okfValidatorNoticeShown` is ignored.
+
 ## [0.4.0] - 2026-09-12
 
 ### Added
