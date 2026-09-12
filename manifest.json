@@ -1,7 +1,7 @@
 {
 	"id": "lokf-registrar",
 	"name": "LOKF Registrar",
-	"version": "0.5.0",
+	"version": "1.0.0",
 	"minAppVersion": "1.13.0",
 	"description": "Catch broken note links, missing properties, invalid note types in your frontmatter as you write, so your vault stays a clean shared knowledge graph. Fills a Registrar role for Linked Open Knowledge Format (LOKF), a semantic OKF layer.",
 	"author": "Noel McLoughlin",

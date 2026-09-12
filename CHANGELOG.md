@@ -6,6 +6,8 @@ No version below has been published as a GitHub release yet, so entries describe
 
 ## [Unreleased]
 
+## [1.0.0] - 2026-09-12
+
 ### Changed
 
 - **A vault with no bundle is left alone.** With nothing configured, a root `index.md` carrying a LOKF header makes the whole vault the bundle and a top-level `knowledge_bundle/` makes that the bundle, as before; a vault with neither now has *no bundle* - nothing scanned, no root-header warning, status bar *LOKF: no bundle*, commands explain instead of acting - rather than being read as one whole-vault bundle. The workshop is never mistaken for the exhibition.
