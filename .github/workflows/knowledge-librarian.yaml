@@ -59,7 +59,7 @@ jobs:
       - name: Install the lokf sidecar
         id: install-lokf
         continue-on-error: true
-        run: uv sync
+        run: uv sync --locked
         working-directory: .lokf
 
       # The librarian skill is runtime state, not source (its own hygiene note),
@@ -104,7 +104,7 @@ jobs:
       - name: Run the librarian agent
         if: vars.KNOWLEDGE_LIBRARIAN_ENABLED == 'true'
         env:
-          AGENT_CLI: ${{ vars.AGENT_CLI }}
+          AGENT_CLI: ${{ vars.AGENT_CLI || secrets.AGENT_CLI }}
         run: bash .lokf/scripts/knowledge-librarian.sh
 
       # The wrapper enforces the same boundary itself, immediately after the agent
@@ -223,6 +223,29 @@ jobs:
         id: push
         run: |
           set -euo pipefail
+          # Trust nothing the `refresh` job decided on its own - it shared a
+          # workspace with the agent, so its checks can in principle be
+          # blinded or skipped (see the wrapper script's comments). Re-derive
+          # the path check here, on this job's clean checkout, before
+          # anything from the patch touches disk.
+          paths="$(git apply --numstat "$RUNNER_TEMP/librarian.patch" | cut -f3-)"
+          bad="$(printf '%s\n' "$paths" | grep -Ev '^(\.lokf/knowledge/|knowledge_bundle/|\.lokf/feedback\.md$)' || true)"
+          if [ -n "${bad//[$'\n\t ']/}" ]; then
+            echo "::error::Patch touches paths outside the allowed bundle:"
+            printf '%s\n' "$bad" | sed '/^$/d; s/^/  /'
+            exit 1
+          fi
+          # This skill never writes a human: confirmation (see lokf-librarian's
+          # SKILL.md). A PR opened with GITHUB_TOKEN never fires
+          # knowledge-registrar.yaml's own pull_request-triggered provenance
+          # job - GitHub does not start pull_request workflows for a PR
+          # authored by the default token - so this is that check's only
+          # backstop for this particular PR; see the sibling skills
+          # repository's scheduled-task.md.
+          if grep -Eq '^\+ *-? *by: *human:' "$RUNNER_TEMP/librarian.patch"; then
+            echo "::error::Patch adds a 'by: human:' claim - the scheduled librarian must never author one."
+            exit 1
+          fi
           # Apply the agent's proposed change onto a clean checkout; fails safe if
           # the default branch moved since `refresh` ran.
           git apply --index --whitespace=nowarn "$RUNNER_TEMP/librarian.patch"

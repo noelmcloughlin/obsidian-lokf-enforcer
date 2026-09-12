@@ -61,7 +61,7 @@ jobs:
 
       - name: Install semantic-release (pinned, not a project dependency)
         run: |
-          npm install --no-save --no-audit --no-fund \
+          npm install --no-save --no-audit --no-fund --ignore-scripts \
             semantic-release@25.0.9 \
             @semantic-release/commit-analyzer@13.0.1 \
             @semantic-release/exec@7.1.0 \
@@ -105,7 +105,7 @@ jobs:
 
       - name: Install semantic-release (pinned, not a project dependency)
         run: |
-          npm install --no-save --no-audit --no-fund \
+          npm install --no-save --no-audit --no-fund --ignore-scripts \
             semantic-release@25.0.9 \
             @semantic-release/commit-analyzer@13.0.1 \
             @semantic-release/exec@7.1.0 \
